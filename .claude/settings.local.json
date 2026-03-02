@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:help.obsidian.md)",
+      "WebSearch",
+      "WebFetch(domain:publish-01.obsidian.md)",
+      "WebFetch(domain:github.com)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(mkdir:*)",
+      "WebFetch(domain:docs.python-telegram-bot.org)",
+      "WebFetch(domain:langchain-ai.github.io)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:forum.obsidian.md)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:mcp-obsidian.org)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm view:*)"
+    ]
+  }
+}
