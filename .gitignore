@@ -30,3 +30,4 @@ vault-data/
 
 # Task tracker
 TASKS.md
+.claude/settings.local.json
