@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import TYPE_CHECKING
+from functools import wraps
+from typing import TYPE_CHECKING, Callable
 
 import structlog
 from telegram import Update
@@ -57,6 +58,8 @@ REQUEST_PREFIXES = {
     "please",
 }
 
+_FIRST_WORD_RE = re.compile(r"[A-Za-z]+")
+
 
 def _check_authorized(update: Update, settings: Settings) -> bool:
     user = update.effective_user
@@ -70,6 +73,20 @@ def _check_authorized(update: Update, settings: Settings) -> bool:
         last_name=user.last_name,
     )
     return False
+
+
+def _require_auth(handler: Callable) -> Callable:
+    """Decorator that rejects unauthorized users before the handler runs."""
+
+    @wraps(handler)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        settings: Settings = context.application.bot_data["settings"]
+        if not _check_authorized(update, settings):
+            await _reply_with_typing(update, "Sorry, I'm not available for public use.")
+            return
+        return await handler(update, context)
+
+    return wrapper
 
 
 async def _invoke_agent(agent: CompiledGraph, chat_id: int, text: str) -> str:
@@ -123,6 +140,26 @@ async def _invoke_agent(agent: CompiledGraph, chat_id: int, text: str) -> str:
     await asyncio.wait_for(_stream(), timeout=120.0)
     logger.debug("Agent invocation finished", chat_id=chat_id)
     return last_content or "I processed your request but have nothing to report."
+
+
+async def _invoke_and_reply(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    prompt: str,
+) -> None:
+    """Send typing indicator, invoke the agent, and reply (with error handling)."""
+    agent: CompiledGraph = context.application.bot_data["agent"]
+    await update.message.chat.send_action(ChatAction.TYPING)
+
+    try:
+        response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+        await _send_response(update, response)
+    except Exception:
+        logger.exception("Error invoking agent")
+        await _reply_with_typing(
+            update,
+            "I'm having trouble right now. Please try again in a moment.",
+        )
 
 
 async def _send_response(update: Update, text: str) -> None:
@@ -182,10 +219,10 @@ def _is_direct_request(text: str) -> bool:
     if not stripped:
         return False
 
-    if "?" in stripped:
+    if stripped.endswith("?"):
         return True
 
-    first_word_match = re.match(r"^[A-Za-z]+", stripped)
+    first_word_match = _FIRST_WORD_RE.search(stripped)
     if first_word_match:
         return first_word_match.group(0).lower() in REQUEST_PREFIXES
 
@@ -210,12 +247,8 @@ def _build_memory_capture_prompt(text: str) -> str:
 # --- Command Handlers ---
 
 
+@_require_auth
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.application.bot_data["settings"]
-    if not _check_authorized(update, settings):
-        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
-        return
-
     await _reply_with_typing(
         update,
         "Hi! I'm your Obsidian vault assistant.\n\n"
@@ -230,12 +263,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+@_require_auth
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.application.bot_data["settings"]
-    if not _check_authorized(update, settings):
-        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
-        return
-
     await _reply_with_typing(
         update,
         "Available commands:\n"
@@ -251,92 +280,38 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+@_require_auth
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.application.bot_data["settings"]
-    if not _check_authorized(update, settings):
-        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
-        return
-
-    agent: CompiledGraph = context.application.bot_data["agent"]
-    await update.message.chat.send_action(ChatAction.TYPING)
-
     path = today_daily_note_path()
     prompt = (
         f"Read today's daily note at '{path}'. "
         "If it doesn't exist, create it using the daily note template."
     )
-
-    try:
-        response = await _invoke_agent(agent, update.effective_chat.id, prompt)
-        await _send_response(update, response)
-    except Exception:
-        logger.exception("Error handling /today command")
-        await _reply_with_typing(
-            update,
-            "I'm having trouble accessing the vault right now. Please try again."
-        )
+    await _invoke_and_reply(update, context, prompt)
 
 
+@_require_auth
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.application.bot_data["settings"]
-    if not _check_authorized(update, settings):
-        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
-        return
-
     query = " ".join(context.args) if context.args else ""
     if not query:
         await _reply_with_typing(update, "Usage: /search <query>")
         return
 
-    agent: CompiledGraph = context.application.bot_data["agent"]
-    await update.message.chat.send_action(ChatAction.TYPING)
-
-    try:
-        response = await _invoke_agent(
-            agent, update.effective_chat.id, f"Search the vault for: {query}"
-        )
-        await _send_response(update, response)
-    except Exception:
-        logger.exception("Error handling /search command")
-        await _reply_with_typing(
-            update,
-            "I'm having trouble searching right now. Please try again."
-        )
+    await _invoke_and_reply(update, context, f"Search the vault for: {query}")
 
 
+@_require_auth
 async def cmd_read(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.application.bot_data["settings"]
-    if not _check_authorized(update, settings):
-        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
-        return
-
     path = " ".join(context.args) if context.args else ""
     if not path:
         await _reply_with_typing(update, "Usage: /read <path/to/note>")
         return
 
-    agent: CompiledGraph = context.application.bot_data["agent"]
-    await update.message.chat.send_action(ChatAction.TYPING)
-
-    try:
-        response = await _invoke_agent(
-            agent, update.effective_chat.id, f"Read the note at: {path}"
-        )
-        await _send_response(update, response)
-    except Exception:
-        logger.exception("Error handling /read command")
-        await _reply_with_typing(
-            update,
-            "I can't access the vault right now. Please try again."
-        )
+    await _invoke_and_reply(update, context, f"Read the note at: {path}")
 
 
+@_require_auth
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.application.bot_data["settings"]
-    if not _check_authorized(update, settings):
-        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
-        return
-
     tool_names = [t.name for t in context.application.bot_data.get("tools", [])]
     await _reply_with_typing(
         update,
@@ -349,19 +324,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 # --- Natural Language Handler ---
 
 
+@_require_auth
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    settings: Settings = context.application.bot_data["settings"]
     user_id = update.effective_user.id
-
-    if not _check_authorized(update, settings):
-        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
-        return
-
     text = update.message.text
     if not text:
         return
 
     agent: CompiledGraph = context.application.bot_data["agent"]
+    settings: Settings = context.application.bot_data["settings"]
     link_extractor: LinkExtractor | None = context.application.bot_data.get(
         "link_extractor"
     )
@@ -374,9 +345,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             urls = link_extractor.extract_urls(text)
             if urls:
                 logger.info("Processing links", user_id=user_id, url_count=len(urls))
+                urls = urls[: settings.url_extraction_max_urls_per_message]
+
+                # Extract all URLs in parallel (independent I/O)
+                extractions = await asyncio.gather(
+                    *(link_extractor.extract(url) for url in urls),
+                    return_exceptions=True,
+                )
+
                 responses: list[str] = []
-                for url in urls[: settings.url_extraction_max_urls_per_message]:
-                    extraction = await link_extractor.extract(url)
+                for extraction in extractions:
+                    if isinstance(extraction, BaseException):
+                        logger.exception("Link extraction failed", exc_info=extraction)
+                        continue
                     prompt = (
                         _build_link_capture_prompt(extraction)
                         if extraction.success
@@ -385,7 +366,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     response = await _invoke_agent(agent, update.effective_chat.id, prompt)
                     responses.append(response)
 
-                await _send_response(update, "\n\n".join(responses))
+                if responses:
+                    await _send_response(update, "\n\n".join(responses))
                 return
 
         if not _is_direct_request(text):
