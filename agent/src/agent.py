@@ -10,7 +10,7 @@ from langchain.agents import create_agent
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
-    from langgraph.graph.graph import CompiledGraph
+    from langgraph.graph.state import CompiledStateGraph
 
     from .config import Settings
 
@@ -39,7 +39,7 @@ def build_agent(
     settings: Settings,
     tools: list[BaseTool],
     system_prompt: str,
-) -> CompiledGraph:
+) -> CompiledStateGraph:
     """Create the LangGraph ReAct agent with MCP tools and conversation memory."""
     llm = create_llm(settings)
     memory = InMemorySaver()

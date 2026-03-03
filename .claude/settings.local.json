@@ -15,7 +15,8 @@
       "WebFetch(domain:www.npmjs.com)",
       "WebFetch(domain:mcp-obsidian.org)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(npm view:*)"
+      "Bash(npm view:*)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

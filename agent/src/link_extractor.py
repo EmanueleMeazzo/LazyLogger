@@ -8,7 +8,7 @@ import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -32,6 +32,9 @@ class LinkExtractionResult:
 class LinkExtractor:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._blocked_domains = settings.get_blocked_domains()
+        self._allowed_domains = settings.get_allowed_domains()
+        self._dns_cache: dict[str, set[str]] = {}
 
     def extract_urls(self, text: str) -> list[str]:
         seen: set[str] = set()
@@ -49,49 +52,52 @@ class LinkExtractor:
         canonical_url = parsed.geturl()
         captured_at = datetime.now(tz=timezone.utc).isoformat()
 
-        allowed, error = await self._is_allowed_url(canonical_url)
+        allowed, error = await self._is_allowed_url(parsed)
         if not allowed:
-            return LinkExtractionResult(
-                url=url,
-                canonical_url=canonical_url,
-                title=domain or "link",
-                extracted_text="",
-                captured_at=captured_at,
-                domain=domain,
-                note_path=self._build_note_path(domain, captured_at, canonical_url),
-                success=False,
-                error=error,
+            return self._make_result(
+                url, canonical_url, domain, captured_at,
+                success=False, error=error,
             )
 
         try:
             title, text = await self._extract_with_crawl4ai(canonical_url)
             note_path = self._build_note_path(domain, captured_at, canonical_url, title)
-            return LinkExtractionResult(
-                url=url,
-                canonical_url=canonical_url,
-                title=title,
-                extracted_text=text,
-                captured_at=captured_at,
-                domain=domain,
-                note_path=note_path,
-                success=True,
+            return self._make_result(
+                url, canonical_url, domain, captured_at,
+                success=True, title=title, extracted_text=text, note_path=note_path,
             )
         except Exception as exc:
-            return LinkExtractionResult(
-                url=url,
-                canonical_url=canonical_url,
-                title=domain or "link",
-                extracted_text="",
-                captured_at=captured_at,
-                domain=domain,
-                note_path=self._build_note_path(domain, captured_at, canonical_url),
-                success=False,
-                error=f"Extraction failed: {exc}",
+            return self._make_result(
+                url, canonical_url, domain, captured_at,
+                success=False, error=f"Extraction failed: {exc}",
             )
 
-    async def _is_allowed_url(self, url: str) -> tuple[bool, str | None]:
-        parsed = urlparse(url)
+    def _make_result(
+        self,
+        url: str,
+        canonical_url: str,
+        domain: str,
+        captured_at: str,
+        *,
+        success: bool,
+        title: str | None = None,
+        extracted_text: str = "",
+        note_path: str | None = None,
+        error: str | None = None,
+    ) -> LinkExtractionResult:
+        return LinkExtractionResult(
+            url=url,
+            canonical_url=canonical_url,
+            title=title or domain or "link",
+            extracted_text=extracted_text,
+            captured_at=captured_at,
+            domain=domain,
+            note_path=note_path or self._build_note_path(domain, captured_at, canonical_url, title),
+            success=success,
+            error=error,
+        )
 
+    async def _is_allowed_url(self, parsed: ParseResult) -> tuple[bool, str | None]:
         if parsed.scheme not in {"http", "https"}:
             return False, "Only http/https links are supported"
 
@@ -99,21 +105,23 @@ class LinkExtractor:
             return False, "Invalid URL hostname"
 
         hostname = parsed.hostname.lower()
-        blocked = self.settings.get_blocked_domains()
-        allowed = self.settings.get_allowed_domains()
 
-        if self._matches_domain_list(hostname, blocked):
+        if self._matches_domain_list(hostname, self._blocked_domains):
             return False, "Domain is blocked"
 
-        if allowed and not self._matches_domain_list(hostname, allowed):
+        if self._allowed_domains and not self._matches_domain_list(hostname, self._allowed_domains):
             return False, "Domain is not in allowed list"
 
         if self.settings.url_allow_private_nets:
             return True, None
 
-        resolved_ips = await asyncio.to_thread(self._resolve_ips, hostname)
-        if not resolved_ips:
-            return False, "Could not resolve host"
+        if hostname in self._dns_cache:
+            resolved_ips = self._dns_cache[hostname]
+        else:
+            resolved_ips = await asyncio.to_thread(self._resolve_ips, hostname)
+            if not resolved_ips:
+                return False, "Could not resolve host"
+            self._dns_cache[hostname] = resolved_ips
 
         for ip in resolved_ips:
             if self._is_private_or_local_ip(ip):

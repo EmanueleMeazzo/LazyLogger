@@ -19,7 +19,7 @@ from telegram.ext import (
 from .utils import split_message, today_daily_note_path
 
 if TYPE_CHECKING:
-    from langgraph.graph.graph import CompiledGraph
+    from langgraph.graph.state import CompiledStateGraph
 
     from .config import Settings
     from .link_extractor import LinkExtractionResult, LinkExtractor
@@ -89,7 +89,7 @@ def _require_auth(handler: Callable) -> Callable:
     return wrapper
 
 
-async def _invoke_agent(agent: CompiledGraph, chat_id: int, text: str) -> str:
+async def _invoke_agent(agent: CompiledStateGraph, chat_id: int, text: str) -> str:
     """Invoke the LangGraph agent and return the response text."""
     config = {"configurable": {"thread_id": str(chat_id)}}
     logger.debug("Agent invocation started", chat_id=chat_id, input=text)
@@ -148,7 +148,7 @@ async def _invoke_and_reply(
     prompt: str,
 ) -> None:
     """Send typing indicator, invoke the agent, and reply (with error handling)."""
-    agent: CompiledGraph = context.application.bot_data["agent"]
+    agent: CompiledStateGraph = context.application.bot_data["agent"]
     await update.message.chat.send_action(ChatAction.TYPING)
 
     try:
@@ -331,7 +331,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not text:
         return
 
-    agent: CompiledGraph = context.application.bot_data["agent"]
+    agent: CompiledStateGraph = context.application.bot_data["agent"]
     settings: Settings = context.application.bot_data["settings"]
     link_extractor: LinkExtractor | None = context.application.bot_data.get(
         "link_extractor"
