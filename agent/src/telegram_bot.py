@@ -131,6 +131,11 @@ async def _send_response(update: Update, text: str) -> None:
         await update.message.reply_text(chunk)
 
 
+async def _reply_with_typing(update: Update, text: str) -> None:
+    await update.message.chat.send_action(ChatAction.TYPING)
+    await _send_response(update, text)
+
+
 def _build_link_capture_prompt(result: LinkExtractionResult) -> str:
     daily_path = today_daily_note_path()
     captured_at = result.captured_at
@@ -208,10 +213,11 @@ def _build_memory_capture_prompt(text: str) -> str:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     if not _check_authorized(update, settings):
-        await update.message.reply_text("Sorry, I'm not available for public use.")
+        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
         return
 
-    await update.message.reply_text(
+    await _reply_with_typing(
+        update,
         "Hi! I'm your Obsidian vault assistant.\n\n"
         "Send me any message and I'll help you take notes, "
         "search your vault, or organize your thoughts.\n\n"
@@ -227,10 +233,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     if not _check_authorized(update, settings):
-        await update.message.reply_text("Sorry, I'm not available for public use.")
+        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
         return
 
-    await update.message.reply_text(
+    await _reply_with_typing(
+        update,
         "Available commands:\n"
         "/today - Show or create today's daily note\n"
         "/search <query> - Search the vault\n"
@@ -247,7 +254,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     if not _check_authorized(update, settings):
-        await update.message.reply_text("Sorry, I'm not available for public use.")
+        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
         return
 
     agent: CompiledGraph = context.application.bot_data["agent"]
@@ -264,7 +271,8 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _send_response(update, response)
     except Exception:
         logger.exception("Error handling /today command")
-        await update.message.reply_text(
+        await _reply_with_typing(
+            update,
             "I'm having trouble accessing the vault right now. Please try again."
         )
 
@@ -272,12 +280,12 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     if not _check_authorized(update, settings):
-        await update.message.reply_text("Sorry, I'm not available for public use.")
+        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
         return
 
     query = " ".join(context.args) if context.args else ""
     if not query:
-        await update.message.reply_text("Usage: /search <query>")
+        await _reply_with_typing(update, "Usage: /search <query>")
         return
 
     agent: CompiledGraph = context.application.bot_data["agent"]
@@ -290,7 +298,8 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _send_response(update, response)
     except Exception:
         logger.exception("Error handling /search command")
-        await update.message.reply_text(
+        await _reply_with_typing(
+            update,
             "I'm having trouble searching right now. Please try again."
         )
 
@@ -298,12 +307,12 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def cmd_read(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     if not _check_authorized(update, settings):
-        await update.message.reply_text("Sorry, I'm not available for public use.")
+        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
         return
 
     path = " ".join(context.args) if context.args else ""
     if not path:
-        await update.message.reply_text("Usage: /read <path/to/note>")
+        await _reply_with_typing(update, "Usage: /read <path/to/note>")
         return
 
     agent: CompiledGraph = context.application.bot_data["agent"]
@@ -316,7 +325,8 @@ async def cmd_read(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _send_response(update, response)
     except Exception:
         logger.exception("Error handling /read command")
-        await update.message.reply_text(
+        await _reply_with_typing(
+            update,
             "I can't access the vault right now. Please try again."
         )
 
@@ -324,11 +334,12 @@ async def cmd_read(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings: Settings = context.application.bot_data["settings"]
     if not _check_authorized(update, settings):
-        await update.message.reply_text("Sorry, I'm not available for public use.")
+        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
         return
 
     tool_names = [t.name for t in context.application.bot_data.get("tools", [])]
-    await update.message.reply_text(
+    await _reply_with_typing(
+        update,
         "Status: Running\n"
         f"MCP tools loaded: {len(tool_names)}\n"
         f"Tools: {', '.join(tool_names) if tool_names else 'none'}"
@@ -343,7 +354,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
 
     if not _check_authorized(update, settings):
-        await update.message.reply_text("Sorry, I'm not available for public use.")
+        await _reply_with_typing(update, "Sorry, I'm not available for public use.")
         return
 
     text = update.message.text
@@ -387,7 +398,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _send_response(update, response)
     except Exception:
         logger.exception("Error invoking agent", user_id=user_id)
-        await update.message.reply_text(
+        await _reply_with_typing(
+            update,
             "I'm having trouble thinking right now. Please try again in a moment."
         )
 
