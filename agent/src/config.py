@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
@@ -35,6 +37,9 @@ class Settings(BaseSettings):
     url_blocked_domains: str = ""
     link_notes_folder: str = "Links"
 
+    # Timezone
+    user_timezone: str = "UTC"
+
     # Health server
     health_port: int = 8080
 
@@ -45,6 +50,18 @@ class Settings(BaseSettings):
         if not users:
             raise ValueError(
                 "TELEGRAM_AUTHORIZED_USERS must contain at least one username"
+            )
+        return v
+
+    @field_validator("user_timezone", mode="after")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, KeyError):
+            raise ValueError(
+                f"Invalid USER_TIMEZONE: {v!r}. "
+                "Use IANA timezone names (e.g. 'Europe/Rome', 'UTC')."
             )
         return v
 

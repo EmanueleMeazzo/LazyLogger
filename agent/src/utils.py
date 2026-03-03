@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 # Telegram message length limit
 TELEGRAM_MAX_LENGTH = 4096
@@ -43,6 +45,9 @@ def today_daily_note_path() -> str:
 
     Format: YYYY/MM/YYYYMMDD.md
     Example: 2026/03/20260302.md
+
+    Timezone is read from the USER_TIMEZONE env var (default: UTC).
     """
-    now = datetime.now(tz=timezone.utc)
+    tz = os.environ.get("USER_TIMEZONE", "UTC")
+    now = datetime.now(tz=ZoneInfo(tz))
     return f"{now.year}/{now.month:02d}/{now.year}{now.month:02d}{now.day:02d}.md"

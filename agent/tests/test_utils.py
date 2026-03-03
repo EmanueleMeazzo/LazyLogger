@@ -54,3 +54,20 @@ class TestTodayDailyNotePath:
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             result = today_daily_note_path()
         assert result == "2026/01/20260105.md"
+
+    def test_respects_user_timezone_env(self):
+        # 2026-03-01 23:30 UTC == 2026-03-02 in Europe/Rome (+1h)
+        from datetime import timedelta
+
+        rome_tz = timezone(timedelta(hours=1))
+        fake_now = datetime(2026, 3, 2, 0, 30, tzinfo=rome_tz)
+        with (
+            patch.dict("os.environ", {"USER_TIMEZONE": "Europe/Rome"}),
+            patch("src.utils.ZoneInfo", return_value=rome_tz) as mock_zi,
+            patch("src.utils.datetime") as mock_dt,
+        ):
+            mock_dt.now.return_value = fake_now
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = today_daily_note_path()
+        mock_zi.assert_called_once_with("Europe/Rome")
+        assert result == "2026/03/20260302.md"
