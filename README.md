@@ -114,10 +114,12 @@ docker compose up -d --build
 | `/help` | List commands |
 
 Any other text message is treated as a natural language instruction.
+Voice notes and audio files are transcribed with Azure OpenAI Whisper and then processed as natural language.
 
 Default natural-language behavior:
 - Messages containing one or more URLs are automatically parsed via Crawl4AI and stored as dedicated link notes with backlinks in today's note.
 - Messages that are not direct questions/requests are stored as memory entries in today's daily note.
+- Transcribed audio is prefixed with `[Transcribed audio]` before normal routing.
 
 ## Configuration
 
@@ -128,6 +130,7 @@ All configuration is via environment variables (`.env` file). See `.env.example`
 | `AZURE_OPENAI_ENDPOINT` | Yes | — | Azure OpenAI endpoint URL |
 | `AZURE_OPENAI_API_KEY` | Yes | — | Azure OpenAI API key |
 | `AZURE_OPENAI_DEPLOYMENT` | No | `gpt-4o` | Model deployment name |
+| `AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT` | No | `whisper-1` | Whisper transcription deployment name used for audio messages |
 | `AZURE_OPENAI_API_VERSION` | No | `2025-03-01-preview` | API version override |
 | `TELEGRAM_BOT_TOKEN` | Yes | — | Telegram bot token from @BotFather |
 | `TELEGRAM_AUTHORIZED_USERS` | Yes | — | Comma-separated Telegram usernames (without @) |

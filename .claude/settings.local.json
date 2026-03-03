@@ -16,7 +16,9 @@
       "WebFetch(domain:mcp-obsidian.org)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(npm view:*)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(python:*)",
+      "Bash(uv run:*)"
     ]
   }
 }

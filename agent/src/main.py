@@ -12,6 +12,7 @@ import sys
 
 import structlog
 from aiohttp import web
+from openai import AsyncAzureOpenAI
 
 from .agent import build_agent, load_system_prompt
 from .config import Settings
@@ -77,6 +78,11 @@ async def async_main() -> None:
     telegram_app.bot_data["tools"] = tools
     telegram_app.bot_data["mcp_client"] = mcp_client
     telegram_app.bot_data["link_extractor"] = LinkExtractor(settings)
+    telegram_app.bot_data["openai_client"] = AsyncAzureOpenAI(
+        api_key=settings.azure_openai_api_key,
+        azure_endpoint=settings.azure_openai_endpoint,
+        api_version=settings.azure_openai_api_version,
+    )
 
     # Start health server
     health_runner = await start_health_server(settings.health_port)
@@ -107,6 +113,8 @@ async def async_main() -> None:
         await telegram_app.stop()
         await telegram_app.shutdown()
         await health_runner.cleanup()
+        # Close OpenAI client
+        await telegram_app.bot_data["openai_client"].close()
         # Close MCP client (stops subprocess)
         if hasattr(mcp_client, "__aexit__"):
             await mcp_client.__aexit__(None, None, None)

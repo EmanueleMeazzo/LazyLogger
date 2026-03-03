@@ -5,6 +5,7 @@ description = "AI agent that integrates Obsidian vault with Telegram via LangCha
 requires-python = ">=3.13"
 dependencies = [
     "langchain[openai]",
+    "openai>=1.0",
     "langchain-mcp-adapters",
     "langgraph",
     "python-telegram-bot>=22.0",

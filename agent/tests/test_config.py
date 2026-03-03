@@ -49,6 +49,7 @@ class TestSettings:
         try:
             s = Settings(_env_file=None)
             assert s.azure_openai_deployment == "gpt-4o"
+            assert s.azure_openai_transcription_deployment == "whisper-1"
             assert s.llm_max_tokens == 4096
             assert s.health_port == 8080
             assert s.url_extraction_enabled is True

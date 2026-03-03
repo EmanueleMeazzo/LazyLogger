@@ -536,7 +536,7 @@ These are out of scope for v1 but worth considering:
 
 - [ ] **Webhook mode** for Telegram (lower latency, requires HTTPS + domain)
 - [ ] **Persistent conversation memory** (Redis or SQLite in a volume)
-- [ ] **Voice message support** — transcribe Telegram voice messages via Azure Speech or Whisper, then process as text
+- [x] **Voice and audio message support** — transcribe Telegram voice/audio messages via Azure OpenAI Whisper, then process as text
 - [ ] **Scheduled tasks** — daily summary generation, weekly review notes
 - [ ] **Multi-user support** — each authorized user gets their own conversation context
 - [ ] **Monitoring** — Prometheus metrics, health dashboard

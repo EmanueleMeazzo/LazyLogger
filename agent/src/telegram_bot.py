@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import mimetypes
 import re
 from functools import wraps
 from typing import TYPE_CHECKING, Callable
@@ -20,11 +22,15 @@ from .utils import split_message, today_daily_note_path
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
+    from openai import AsyncAzureOpenAI
 
     from .config import Settings
     from .link_extractor import LinkExtractionResult, LinkExtractor
 
 logger = structlog.get_logger()
+
+TRANSCRIBED_AUDIO_PREFIX = "[Transcribed audio] "
+SUPPORTED_AUDIO_MIME_PREFIX = "audio/"
 
 REQUEST_PREFIXES = {
     "add",
@@ -171,6 +177,163 @@ async def _send_response(update: Update, text: str) -> None:
 async def _reply_with_typing(update: Update, text: str) -> None:
     await update.message.chat.send_action(ChatAction.TYPING)
     await _send_response(update, text)
+
+
+async def _download_audio_for_transcription(
+    update: Update,
+) -> tuple[bytes, str, str] | None:
+    message = update.message
+    if not message:
+        return None
+
+    file_id: str | None = None
+    filename = "audio_input"
+    mime_type = "application/octet-stream"
+
+    if message.voice:
+        file_id = message.voice.file_id
+        filename = "voice.ogg"
+        mime_type = message.voice.mime_type or "audio/ogg"
+    elif message.audio:
+        file_id = message.audio.file_id
+        filename = message.audio.file_name or "audio_input.mp3"
+        mime_type = message.audio.mime_type or "audio/mpeg"
+    elif message.document and message.document.mime_type:
+        if message.document.mime_type.startswith(SUPPORTED_AUDIO_MIME_PREFIX):
+            file_id = message.document.file_id
+            filename = message.document.file_name or "audio_document"
+            mime_type = message.document.mime_type
+
+    if not file_id:
+        return None
+
+    telegram_file = await message.get_bot().get_file(file_id)
+    file_bytes = bytes(await telegram_file.download_as_bytearray())
+    return file_bytes, filename, mime_type
+
+
+def _normalize_audio_filename(filename: str, mime_type: str) -> str:
+    if "." in filename:
+        return filename
+    guessed_ext = mimetypes.guess_extension(mime_type) or ".bin"
+    return f"{filename}{guessed_ext}"
+
+
+async def _transcribe_audio_with_azure(
+    client: AsyncAzureOpenAI,
+    deployment: str,
+    audio_bytes: bytes,
+    filename: str,
+    mime_type: str,
+) -> str:
+    normalized_filename = _normalize_audio_filename(filename, mime_type)
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = normalized_filename
+
+    transcription = await client.audio.transcriptions.create(
+        model=deployment,
+        file=audio_file,
+    )
+
+    text = (getattr(transcription, "text", "") or "").strip()
+    if not text:
+        raise ValueError("Transcription returned empty text")
+    return text
+
+
+async def _extract_message_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> str | None:
+    message = update.message
+    if not message:
+        return None
+
+    if message.text:
+        return message.text
+
+    audio_payload = await _download_audio_for_transcription(update)
+    if not audio_payload:
+        return None
+
+    audio_bytes, filename, mime_type = audio_payload
+    settings: Settings = context.application.bot_data["settings"]
+    client: AsyncAzureOpenAI = context.application.bot_data["openai_client"]
+    try:
+        transcript = await _transcribe_audio_with_azure(
+            client=client,
+            deployment=settings.azure_openai_transcription_deployment,
+            audio_bytes=audio_bytes,
+            filename=filename,
+            mime_type=mime_type,
+        )
+        return f"{TRANSCRIBED_AUDIO_PREFIX}{transcript}"
+    except Exception:
+        logger.exception(
+            "Audio transcription failed",
+            user_id=update.effective_user.id if update.effective_user else None,
+            mime_type=mime_type,
+            filename=filename,
+            byte_size=len(audio_bytes),
+        )
+        await _reply_with_typing(
+            update,
+            "I couldn't transcribe that audio message. Please try a shorter or different audio format.",
+        )
+        return None
+
+
+async def _process_user_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> None:
+    user_id = update.effective_user.id
+    agent: CompiledStateGraph = context.application.bot_data["agent"]
+    settings: Settings = context.application.bot_data["settings"]
+    link_extractor: LinkExtractor | None = context.application.bot_data.get(
+        "link_extractor"
+    )
+
+    logger.info("Received message", user_id=user_id, text_length=len(text))
+
+    if settings.url_extraction_enabled and link_extractor:
+        urls = link_extractor.extract_urls(text)
+        if urls:
+            logger.info("Processing links", user_id=user_id, url_count=len(urls))
+            urls = urls[: settings.url_extraction_max_urls_per_message]
+
+            # Extract all URLs in parallel (independent I/O)
+            extractions = await asyncio.gather(
+                *(link_extractor.extract(url) for url in urls),
+                return_exceptions=True,
+            )
+
+            responses: list[str] = []
+            for extraction in extractions:
+                if isinstance(extraction, BaseException):
+                    logger.exception("Link extraction failed", exc_info=extraction)
+                    continue
+                prompt = (
+                    _build_link_capture_prompt(extraction)
+                    if extraction.success
+                    else _build_link_extraction_error_prompt(extraction)
+                )
+                response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+                responses.append(response)
+
+            if responses:
+                await _send_response(update, "\n\n".join(responses))
+            return
+
+    if not _is_direct_request(text):
+        prompt = _build_memory_capture_prompt(text)
+        response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+        await _send_response(update, response)
+        return
+
+    response = await _invoke_agent(agent, update.effective_chat.id, text)
+    await _send_response(update, response)
 
 
 def _build_link_capture_prompt(result: LinkExtractionResult) -> str:
@@ -326,60 +489,19 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 @_require_auth
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    text = update.message.text
+    text = await _extract_message_text(update, context)
     if not text:
         return
 
-    agent: CompiledStateGraph = context.application.bot_data["agent"]
-    settings: Settings = context.application.bot_data["settings"]
-    link_extractor: LinkExtractor | None = context.application.bot_data.get(
-        "link_extractor"
-    )
     await update.message.chat.send_action(ChatAction.TYPING)
 
-    logger.info("Received message", user_id=user_id, text_length=len(text))
-
     try:
-        if settings.url_extraction_enabled and link_extractor:
-            urls = link_extractor.extract_urls(text)
-            if urls:
-                logger.info("Processing links", user_id=user_id, url_count=len(urls))
-                urls = urls[: settings.url_extraction_max_urls_per_message]
-
-                # Extract all URLs in parallel (independent I/O)
-                extractions = await asyncio.gather(
-                    *(link_extractor.extract(url) for url in urls),
-                    return_exceptions=True,
-                )
-
-                responses: list[str] = []
-                for extraction in extractions:
-                    if isinstance(extraction, BaseException):
-                        logger.exception("Link extraction failed", exc_info=extraction)
-                        continue
-                    prompt = (
-                        _build_link_capture_prompt(extraction)
-                        if extraction.success
-                        else _build_link_extraction_error_prompt(extraction)
-                    )
-                    response = await _invoke_agent(agent, update.effective_chat.id, prompt)
-                    responses.append(response)
-
-                if responses:
-                    await _send_response(update, "\n\n".join(responses))
-                return
-
-        if not _is_direct_request(text):
-            prompt = _build_memory_capture_prompt(text)
-            response = await _invoke_agent(agent, update.effective_chat.id, prompt)
-            await _send_response(update, response)
-            return
-
-        response = await _invoke_agent(agent, update.effective_chat.id, text)
-        await _send_response(update, response)
+        await _process_user_text(update, context, text)
     except Exception:
-        logger.exception("Error invoking agent", user_id=user_id)
+        logger.exception(
+            "Error invoking agent",
+            user_id=update.effective_user.id if update.effective_user else None,
+        )
         await _reply_with_typing(
             update,
             "I'm having trouble thinking right now. Please try again in a moment."
@@ -401,7 +523,11 @@ def build_application(settings: Settings) -> Application:
     app.add_handler(CommandHandler("read", cmd_read))
     app.add_handler(CommandHandler("status", cmd_status))
 
-    # Natural language fallback (any text that isn't a command)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # Natural language and audio fallback (non-command text/voice/audio/audio-docs)
+    message_filter = (
+        (filters.TEXT | filters.VOICE | filters.AUDIO | filters.Document.AUDIO)
+        & ~filters.COMMAND
+    )
+    app.add_handler(MessageHandler(message_filter, handle_message))
 
     return app

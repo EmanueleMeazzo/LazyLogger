@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     azure_openai_endpoint: str
     azure_openai_api_key: str
     azure_openai_deployment: str = "gpt-4o"
+    azure_openai_transcription_deployment: str = "whisper-1"
     azure_openai_api_version: str = "2025-03-01-preview"
 
     # Telegram
