@@ -149,7 +149,7 @@ All three services mount `vault-data`. The `obsidian-sync` and `mcp-server` serv
 
 - **LangChain** with **Azure OpenAI** as the LLM provider
 - **langchain-mcp-adapters** for native MCP tool integration — this package allows LangChain agents to use MCP servers as tool providers without manual tool wrapping
-- **Agent type**: Use LangChain's `create_react_agent` or `create_tool_calling_agent` with the MCP tools
+- **Agent type**: Use LangChain's `create_agent` with the MCP tools
 
 ### MCP Integration via LangChain
 

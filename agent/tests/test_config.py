@@ -51,7 +51,14 @@ class TestSettings:
             assert s.azure_openai_deployment == "gpt-4o"
             assert s.llm_max_tokens == 4096
             assert s.health_port == 8080
+            assert s.url_extraction_enabled is True
+            assert s.url_extractor_backend == "crawl4ai"
+            assert s.url_extraction_max_urls_per_message == 3
             assert s.get_authorized_users() == {"alice"}
         finally:
             for k in env:
                 os.environ.pop(k, None)
+
+    def test_validate_url_backend_raises_for_invalid_value(self):
+        with pytest.raises(ValueError, match="URL_EXTRACTOR_BACKEND"):
+            Settings.validate_url_extractor_backend("unsupported")

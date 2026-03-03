@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import TYPE_CHECKING
 
 import structlog
@@ -20,8 +21,41 @@ if TYPE_CHECKING:
     from langgraph.graph.graph import CompiledGraph
 
     from .config import Settings
+    from .link_extractor import LinkExtractionResult, LinkExtractor
 
 logger = structlog.get_logger()
+
+REQUEST_PREFIXES = {
+    "add",
+    "append",
+    "create",
+    "search",
+    "read",
+    "show",
+    "find",
+    "summarize",
+    "summarise",
+    "update",
+    "organize",
+    "organise",
+    "what",
+    "when",
+    "where",
+    "why",
+    "how",
+    "can",
+    "could",
+    "should",
+    "would",
+    "do",
+    "does",
+    "did",
+    "is",
+    "are",
+    "was",
+    "were",
+    "please",
+}
 
 
 def _check_authorized(update: Update, settings: Settings) -> bool:
@@ -95,6 +129,77 @@ async def _send_response(update: Update, text: str) -> None:
     """Send a response, splitting into multiple messages if needed."""
     for chunk in split_message(text):
         await update.message.reply_text(chunk)
+
+
+def _build_link_capture_prompt(result: LinkExtractionResult) -> str:
+    daily_path = today_daily_note_path()
+    captured_at = result.captured_at
+    title = result.title.replace("\n", " ").strip()
+    return (
+        "Process this captured web link and save it into Obsidian.\n\n"
+        f"- Original URL: {result.url}\n"
+        f"- Canonical URL: {result.canonical_url}\n"
+        f"- Title candidate: {title}\n"
+        f"- Captured at (UTC): {captured_at}\n"
+        f"- Link note target path: {result.note_path}\n"
+        f"- Daily note path for backlink: {daily_path}\n\n"
+        "Required actions:\n"
+        "1) Create or update the link note at the target path.\n"
+        "2) In that link note, store:\n"
+        "   - Title\n"
+        "   - Source URL\n"
+        "   - Captured timestamp\n"
+        "   - A concise synopsis (3-5 bullet points) based only on the extracted content below\n"
+        "   - Tags: #link #synopsis\n"
+        "3) In today's daily note, append under a `## Links` section a bullet with:\n"
+        "   - URL\n"
+        "   - wikilink to the dedicated link note\n"
+        "   - one-line synopsis\n"
+        "4) Confirm what was written and where.\n\n"
+        "Extracted content begins below:\n"
+        "---\n"
+        f"{result.extracted_text}\n"
+        "---"
+    )
+
+
+def _build_link_extraction_error_prompt(result: LinkExtractionResult) -> str:
+    return (
+        "A link was received but extraction failed.\n"
+        f"URL: {result.url}\n"
+        f"Error: {result.error or 'unknown error'}\n"
+        "Respond with a short explanation and suggest sending another link."
+    )
+
+
+def _is_direct_request(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+
+    if "?" in stripped:
+        return True
+
+    first_word_match = re.match(r"^[A-Za-z]+", stripped)
+    if first_word_match:
+        return first_word_match.group(0).lower() in REQUEST_PREFIXES
+
+    return False
+
+
+def _build_memory_capture_prompt(text: str) -> str:
+    daily_path = today_daily_note_path()
+    return (
+        "Treat this user message as a memory entry to store, not as a question to answer.\n\n"
+        f"Daily note target path: {daily_path}\n"
+        "Required actions:\n"
+        "1) Read or create today's daily note at the target path.\n"
+        "2) Append this message under `## Notes` as a concise bullet memory with a timestamp.\n"
+        "3) Do not perform extra tasks unless explicitly requested.\n"
+        "4) Confirm the memory was stored.\n\n"
+        "Memory content:\n"
+        f"{text.strip()}"
+    )
 
 
 # --- Command Handlers ---
@@ -246,11 +351,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     agent: CompiledGraph = context.application.bot_data["agent"]
+    link_extractor: LinkExtractor | None = context.application.bot_data.get(
+        "link_extractor"
+    )
     await update.message.chat.send_action(ChatAction.TYPING)
 
     logger.info("Received message", user_id=user_id, text_length=len(text))
 
     try:
+        if settings.url_extraction_enabled and link_extractor:
+            urls = link_extractor.extract_urls(text)
+            if urls:
+                logger.info("Processing links", user_id=user_id, url_count=len(urls))
+                responses: list[str] = []
+                for url in urls[: settings.url_extraction_max_urls_per_message]:
+                    extraction = await link_extractor.extract(url)
+                    prompt = (
+                        _build_link_capture_prompt(extraction)
+                        if extraction.success
+                        else _build_link_extraction_error_prompt(extraction)
+                    )
+                    response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+                    responses.append(response)
+
+                await _send_response(update, "\n\n".join(responses))
+                return
+
+        if not _is_direct_request(text):
+            prompt = _build_memory_capture_prompt(text)
+            response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+            await _send_response(update, response)
+            return
+
         response = await _invoke_agent(agent, update.effective_chat.id, text)
         await _send_response(update, response)
     except Exception:

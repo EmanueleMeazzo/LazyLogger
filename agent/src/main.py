@@ -15,6 +15,7 @@ from aiohttp import web
 
 from .agent import build_agent, load_system_prompt
 from .config import Settings
+from .link_extractor import LinkExtractor
 from .mcp_client import create_mcp_client
 from .telegram_bot import build_application
 
@@ -75,6 +76,7 @@ async def async_main() -> None:
     telegram_app.bot_data["agent"] = agent
     telegram_app.bot_data["tools"] = tools
     telegram_app.bot_data["mcp_client"] = mcp_client
+    telegram_app.bot_data["link_extractor"] = LinkExtractor(settings)
 
     # Start health server
     health_runner = await start_health_server(settings.health_port)

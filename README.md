@@ -115,6 +115,10 @@ docker compose up -d --build
 
 Any other text message is treated as a natural language instruction.
 
+Default natural-language behavior:
+- Messages containing one or more URLs are automatically parsed via Crawl4AI and stored as dedicated link notes with backlinks in today's note.
+- Messages that are not direct questions/requests are stored as memory entries in today's daily note.
+
 ## Configuration
 
 All configuration is via environment variables (`.env` file). See `.env.example` for the full list.
@@ -129,6 +133,15 @@ All configuration is via environment variables (`.env` file). See `.env.example`
 | `TELEGRAM_AUTHORIZED_USERS` | Yes | — | Comma-separated Telegram usernames (without @) |
 | `LOG_LEVEL` | No | `INFO` | Logging level (`DEBUG` for verbose agent tracing) |
 | `LLM_MAX_TOKENS` | No | `4096` | LLM max output tokens |
+| `URL_EXTRACTION_ENABLED` | No | `true` | Enables automatic URL processing in normal chat messages |
+| `URL_EXTRACTOR_BACKEND` | No | `crawl4ai` | URL extraction backend used by the agent |
+| `URL_EXTRACTION_MAX_URLS_PER_MESSAGE` | No | `3` | Maximum number of URLs processed per incoming message |
+| `URL_FETCH_TIMEOUT_SECONDS` | No | `25` | Per-URL extraction timeout |
+| `URL_FETCH_MAX_CHARS` | No | `12000` | Maximum extracted text passed for synopsis generation |
+| `URL_ALLOW_PRIVATE_NETS` | No | `false` | Allow links resolving to private/local IP ranges |
+| `URL_ALLOWED_DOMAINS` | No | empty | Optional comma-separated allowlist; when set, only these domains are processed |
+| `URL_BLOCKED_DOMAINS` | No | empty | Optional comma-separated blocklist for domains |
+| `LINK_NOTES_FOLDER` | No | `Links` | Vault folder root where dedicated captured-link notes are written |
 
 ## Project Structure
 

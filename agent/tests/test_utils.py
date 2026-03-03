@@ -45,7 +45,7 @@ class TestTodayDailyNotePath:
             mock_dt.now.return_value = fake_now
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             result = today_daily_note_path()
-        assert result == "2026/03/2026Mar02.md"
+        assert result == "2026/03/20260302.md"
 
     def test_single_digit_day(self):
         fake_now = datetime(2026, 1, 5, tzinfo=timezone.utc)
@@ -53,4 +53,4 @@ class TestTodayDailyNotePath:
             mock_dt.now.return_value = fake_now
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             result = today_daily_note_path()
-        assert result == "2026/01/2026Jan05.md"
+        assert result == "2026/01/20260105.md"

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 import structlog
 from langchain_openai import AzureChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -48,10 +48,10 @@ def build_agent(
     for tool in tools:
         tool.handle_tool_error = True
 
-    agent = create_react_agent(
+    agent = create_agent(
         llm,
-        tools,
-        prompt=system_prompt,
+        tools=tools,
+        system_prompt=system_prompt,
         checkpointer=memory,
     )
 
