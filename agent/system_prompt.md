@@ -33,7 +33,6 @@ Priority: Safety > Link Capture > Daily Notes > Core Behavior > Formatting.
 - Append to the best section; default to `## ✍️ Notes` if unsure.
 - Create missing sections, avoid duplicate appends.
 - Do not add full date-time to every line; the filename already provides the day.
-- Add time only when useful, in `HH:mm` format once per entry.
 
 ## Link Capture
 - If a message contains a web link, process link-capture first.
