@@ -174,7 +174,8 @@ async with MultiServerMCPClient(
 ### LLM Configuration
 
 - **Provider**: Azure OpenAI
-- **Model**: `gpt-4o` (or configurable via env var)
+- **Model**: `gpt-5` (or configurable via env var)
+- **Tested with**: `gpt-5`
 - **Temperature**: 0.3 (for reliable tool use)
 - **Max tokens**: 4096
 - **Configuration** via `langchain-openai`:
@@ -320,7 +321,7 @@ OBSIDIAN_AUTH_TOKEN=<token-from-ob-login>
 # === Azure OpenAI ===
 AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com/
 AZURE_OPENAI_API_KEY=<key>
-AZURE_OPENAI_DEPLOYMENT=gpt-4o
+AZURE_OPENAI_DEPLOYMENT=gpt-5
 AZURE_OPENAI_API_VERSION=2024-12-01-preview
 
 # === Telegram ===
@@ -348,7 +349,7 @@ class Settings(BaseSettings):
     # Azure OpenAI
     azure_openai_endpoint: str
     azure_openai_api_key: str
-    azure_openai_deployment: str = "gpt-4o"
+    azure_openai_deployment: str = "gpt-5"
     azure_openai_api_version: str = "2024-12-01-preview"
     
     # Telegram
@@ -503,7 +504,7 @@ volumes:
      ```
    - Extract the auth token for the `OBSIDIAN_AUTH_TOKEN` env var
 4. **Prepare Azure OpenAI**:
-   - Ensure you have a deployment (e.g., `gpt-4o`) in your Azure OpenAI resource
+  - Ensure you have a deployment (e.g., `gpt-5`) in your Azure OpenAI resource
    - Collect endpoint, API key, deployment name, API version
 5. **Configure `.env`**:
    - Copy `.env.example` to `.env`

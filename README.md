@@ -34,8 +34,10 @@ Self-hosted AI agent that integrates an Obsidian vault with Telegram. Send natur
 
 - Docker + Docker Compose (or Podman)
 - An [Obsidian Sync](https://obsidian.md/sync) subscription
-- An Azure OpenAI deployment (gpt-4o recommended)
+- An Azure OpenAI deployment (gpt-5 recommended)
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
+
+Tested with GPT-5.
 
 ## Quick Start
 
@@ -129,7 +131,7 @@ All configuration is via environment variables (`.env` file). See `.env.example`
 |----------|----------|---------|-------------|
 | `AZURE_OPENAI_ENDPOINT` | Yes | — | Azure OpenAI endpoint URL |
 | `AZURE_OPENAI_API_KEY` | Yes | — | Azure OpenAI API key |
-| `AZURE_OPENAI_DEPLOYMENT` | No | `gpt-4o` | Model deployment name |
+| `AZURE_OPENAI_DEPLOYMENT` | No | `gpt-5` | Model deployment name |
 | `AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT` | No | `whisper-1` | Whisper transcription deployment name used for audio messages |
 | `AZURE_OPENAI_API_VERSION` | No | `2025-03-01-preview` | API version override |
 | `TELEGRAM_BOT_TOKEN` | Yes | — | Telegram bot token from @BotFather |

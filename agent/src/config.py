@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     # Azure OpenAI
     azure_openai_endpoint: str
     azure_openai_api_key: str
-    azure_openai_deployment: str = "gpt-4o"
+    azure_openai_deployment: str = "gpt-5"
     azure_openai_transcription_deployment: str = "whisper-1"
     azure_openai_api_version: str = "2025-03-01-preview"
 
@@ -56,14 +56,17 @@ class Settings(BaseSettings):
     @field_validator("user_timezone", mode="after")
     @classmethod
     def validate_timezone(cls, v: str) -> str:
+        normalized = v.strip()
+        if normalized.upper() == "UTC":
+            return "UTC"
         try:
-            ZoneInfo(v)
+            ZoneInfo(normalized)
         except (ZoneInfoNotFoundError, KeyError):
             raise ValueError(
-                f"Invalid USER_TIMEZONE: {v!r}. "
+                f"Invalid USER_TIMEZONE: {normalized!r}. "
                 "Use IANA timezone names (e.g. 'Europe/Rome', 'UTC')."
             )
-        return v
+        return normalized
 
     @field_validator("url_extractor_backend", mode="after")
     @classmethod
