@@ -50,7 +50,16 @@ cp .env.example .env
 
 Edit `.env` with your credentials (see [Configuration](#configuration) below).
 
-### 2. First-time Obsidian Sync setup
+### 2. Create a Telegram bot
+
+1. Open Telegram and start a chat with [@BotFather](https://t.me/BotFather)
+2. Send `/newbot` and follow the prompts to choose a name and username
+3. BotFather will reply with a **bot token** — copy it into your `.env` as `TELEGRAM_BOT_TOKEN`
+4. (Optional) Send `/setprivacy` → select your bot → **Disable** if you want the bot to see all messages in groups
+
+> For a detailed walkthrough, see the [Telegram Bot API docs](https://core.telegram.org/bots/tutorial).
+
+### 3. First-time Obsidian Sync setup
 
 The obsidian-sync container needs a one-time interactive login to authenticate with Obsidian's servers. The credentials are persisted in a Docker volume (`obsidian-config`) so you only do this once.
 
@@ -72,13 +81,13 @@ docker compose run --rm obsidian-sync ob sync-setup --vault "Your Vault Name" --
 > # Log out and back in for this to take effect
 > ```
 
-### 3. Launch
+### 4. Launch
 
 ```bash
 docker compose up -d --build
 ```
 
-### 4. Verify
+### 5. Verify
 
 Check the logs to make sure both services are healthy:
 
@@ -95,7 +104,7 @@ docker compose logs -f obsidian-sync
 
 Then send `/start` to your bot on Telegram. Try: "Create a note for today: hello world!"
 
-### 5. Updating
+### 6. Updating
 
 After pulling code changes:
 
