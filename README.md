@@ -193,7 +193,14 @@ LazyLogger/
 
 **Agent crashes with `SettingsError`**: Check your `.env` — all required variables must be set. `TELEGRAM_AUTHORIZED_USERS` should be plain usernames (e.g., `alice,bob`), not JSON.
 
-**obsidian-sync unhealthy**: Run `docker compose logs obsidian-sync` — likely needs `ob login` (see step 2 above). Health is based on whether `ob sync --continuous --path /vault` is running, with a startup grace period.
+**obsidian-sync unhealthy**: Run `docker compose logs obsidian-sync` — likely needs `ob login` (see step 2 above). Health is based on whether PID 1 is running `ob sync --continuous --path /vault`, with a short startup grace period.
+
+If `docker compose up` stays in `waiting` for a while, run:
+- `docker compose ps`
+- `docker inspect --format='{{json .State.Health}}' obsidian-sync`
+- `docker compose logs -f obsidian-sync`
+
+`waiting` usually means Compose is waiting for the healthcheck gate before starting `agent`.
 
 If logs show `Another sync instance is already running for this vault.` repeatedly, a stale lock file is likely blocking startup.
 Run:

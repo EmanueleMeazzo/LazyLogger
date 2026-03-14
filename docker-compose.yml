@@ -9,11 +9,11 @@ services:
     environment:
       - OBSIDIAN_AUTH_TOKEN=${OBSIDIAN_AUTH_TOKEN:-}
     healthcheck:
-      test: ["CMD-SHELL", "ps -ef | grep -q '[o]b sync --continuous --path /vault'"]
+      test: ["CMD-SHELL", "tr '\\0' ' ' < /proc/1/cmdline | grep -q 'ob sync --continuous --path /vault'"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 120s
+      start_period: 30s
 
   agent:
     build: ./agent
