@@ -48,6 +48,7 @@ def today_daily_note_path() -> str:
 
     Timezone is read from the USER_TIMEZONE env var (default: UTC).
     """
-    tz = os.environ.get("USER_TIMEZONE", "UTC")
-    now = datetime.now(tz=ZoneInfo(tz))
+    tz_name = os.environ.get("USER_TIMEZONE", "UTC")
+    tz = timezone.utc if tz_name.upper() == "UTC" else ZoneInfo(tz_name)
+    now = datetime.now(tz=tz)
     return f"{now.year}/{now.month:02d}/{now.year}{now.month:02d}{now.day:02d}.md"

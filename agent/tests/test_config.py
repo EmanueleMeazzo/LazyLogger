@@ -55,6 +55,7 @@ class TestSettings:
             assert s.url_extraction_enabled is True
             assert s.url_extractor_backend == "crawl4ai"
             assert s.url_extraction_max_urls_per_message == 3
+            assert s.attachments_folder == "Attachments"
             assert s.get_authorized_users() == {"alice"}
         finally:
             for k in env:
@@ -63,3 +64,7 @@ class TestSettings:
     def test_validate_url_backend_raises_for_invalid_value(self):
         with pytest.raises(ValueError, match="URL_EXTRACTOR_BACKEND"):
             Settings.validate_url_extractor_backend("unsupported")
+
+    def test_validate_vault_relative_folder_rejects_traversal(self):
+        with pytest.raises(ValueError, match="cannot contain '..'"):
+            Settings.validate_vault_relative_folder("Attachments/../bad")

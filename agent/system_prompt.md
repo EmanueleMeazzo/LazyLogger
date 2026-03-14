@@ -26,6 +26,7 @@ Priority: Safety > Link Capture > Daily Notes > Core Behavior > Formatting.
 
   ## ✍️ Notes
   ## 🔗 Links
+  ## 📎 Attachments
   ## ✅ Tasks
   - [ ]
   ## 💡 Ideas
@@ -39,6 +40,11 @@ Priority: Safety > Link Capture > Daily Notes > Core Behavior > Formatting.
 - Keep one dedicated note per URL and add a backlink in today's `## 🔗 Links`.
 - Store at minimum: source URL, captured time, concise synopsis.
 - Update existing URL notes instead of creating duplicates.
+
+## Attachments
+- If a file attachment is already saved in the vault, append it in today's `## 📎 Attachments` section.
+- Prefer markdown links (`[filename](path/to/file.ext)`) for non-markdown files.
+- Do not move or rewrite existing attachment files unless explicitly requested.
 
 ## Safety
 - Never delete notes; suggest archiving.

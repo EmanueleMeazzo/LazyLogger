@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import io
 import mimetypes
 import re
+import unicodedata
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import wraps
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 import structlog
@@ -31,6 +37,8 @@ logger = structlog.get_logger()
 
 TRANSCRIBED_AUDIO_PREFIX = "[Transcribed audio] "
 SUPPORTED_AUDIO_MIME_PREFIX = "audio/"
+ATTACHMENT_STEM_MAX_LENGTH = 50
+_SAFE_ATTACHMENT_EXT_RE = re.compile(r"^\.[a-z0-9]{1,10}$")
 
 REQUEST_PREFIXES = {
     "add",
@@ -65,6 +73,17 @@ REQUEST_PREFIXES = {
 }
 
 _FIRST_WORD_RE = re.compile(r"[A-Za-z]+")
+
+
+@dataclass
+class AttachmentPayload:
+    file_name: str
+    file_unique_id: str
+    mime_type: str
+    file_size: int
+    file_bytes: bytes
+    captured_at: datetime
+    caption: str | None = None
 
 
 def _check_authorized(update: Update, settings: Settings) -> bool:
@@ -212,6 +231,101 @@ async def _download_audio_for_transcription(
     return file_bytes, filename, mime_type
 
 
+async def _download_non_audio_document(update: Update) -> AttachmentPayload | None:
+    message = update.message
+    if not message or not message.document:
+        return None
+
+    document = message.document
+    mime_type = document.mime_type or "application/octet-stream"
+    if mime_type.startswith(SUPPORTED_AUDIO_MIME_PREFIX):
+        return None
+
+    filename = document.file_name or "attachment"
+    if "." not in filename:
+        guessed_ext = mimetypes.guess_extension(mime_type) or ".bin"
+        filename = f"{filename}{guessed_ext}"
+
+    telegram_file = await message.get_bot().get_file(document.file_id)
+    file_bytes = bytes(await telegram_file.download_as_bytearray())
+    captured_at = message.date or datetime.now(tz=timezone.utc)
+
+    return AttachmentPayload(
+        file_name=filename,
+        file_unique_id=document.file_unique_id,
+        mime_type=mime_type,
+        file_size=document.file_size or len(file_bytes),
+        file_bytes=file_bytes,
+        captured_at=captured_at,
+        caption=message.caption,
+    )
+
+
+async def _download_photo_attachment(update: Update) -> AttachmentPayload | None:
+    message = update.message
+    if not message or not message.photo:
+        return None
+
+    # Telegram sends multiple sizes; use the last (largest) variant.
+    photo = message.photo[-1]
+    mime_type = "image/jpeg"
+    filename = f"photo_{photo.file_unique_id}.jpg"
+
+    telegram_file = await message.get_bot().get_file(photo.file_id)
+    file_bytes = bytes(await telegram_file.download_as_bytearray())
+    captured_at = message.date or datetime.now(tz=timezone.utc)
+
+    return AttachmentPayload(
+        file_name=filename,
+        file_unique_id=photo.file_unique_id,
+        mime_type=mime_type,
+        file_size=photo.file_size or len(file_bytes),
+        file_bytes=file_bytes,
+        captured_at=captured_at,
+        caption=message.caption,
+    )
+
+
+def _sanitize_attachment_stem(filename: str) -> str:
+    stem = Path(filename).stem or "attachment"
+    ascii_stem = (
+        unicodedata.normalize("NFKD", stem)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", ascii_stem).strip(".-").lower()
+    if not safe:
+        return "attachment"
+    return safe[:ATTACHMENT_STEM_MAX_LENGTH]
+
+
+def _safe_attachment_extension(filename: str, mime_type: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if not suffix:
+        suffix = mimetypes.guess_extension(mime_type) or ".bin"
+    if not _SAFE_ATTACHMENT_EXT_RE.match(suffix):
+        return ".bin"
+    return suffix
+
+
+def _persist_attachment_to_vault(settings: Settings, attachment: AttachmentPayload) -> str:
+    captured_utc = attachment.captured_at.astimezone(timezone.utc)
+    stem = _sanitize_attachment_stem(attachment.file_name)
+    ext = _safe_attachment_extension(attachment.file_name, attachment.mime_type)
+    unique_id = re.sub(r"[^A-Za-z0-9]", "", attachment.file_unique_id or "")[:8]
+    if not unique_id:
+        unique_id = hashlib.sha1(attachment.file_bytes).hexdigest()[:8]
+
+    filename = f"{captured_utc:%Y%m%d-%H%M%S}-{stem}-{unique_id}{ext}"
+    relative_path = (
+        f"{settings.attachments_folder}/{captured_utc:%Y}/{captured_utc:%m}/{filename}"
+    )
+    absolute_path = Path(settings.mcp_vault_path, *relative_path.split("/"))
+    absolute_path.parent.mkdir(parents=True, exist_ok=True)
+    absolute_path.write_bytes(attachment.file_bytes)
+    return relative_path
+
+
 def _normalize_audio_filename(filename: str, mime_type: str) -> str:
     if "." in filename:
         return filename
@@ -239,6 +353,51 @@ async def _transcribe_audio_with_azure(
     if not text:
         raise ValueError("Transcription returned empty text")
     return text
+
+
+async def _analyze_photo_with_azure(
+    client: AsyncAzureOpenAI,
+    deployment: str,
+    photo_bytes: bytes,
+    mime_type: str,
+    caption: str | None = None,
+) -> str:
+    encoded = base64.b64encode(photo_bytes).decode("ascii")
+    prompt_text = (
+        "Analyze this image and extract only the core factual information. "
+        "Return 2-4 concise bullet points, each on its own line, no markdown heading. "
+        "Focus on observable content, text in the image, or actionable context."
+    )
+    if caption and caption.strip():
+        prompt_text += f" User caption context: {caption.strip()}"
+
+    response = await client.chat.completions.create(
+        model=deployment,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise visual note extraction assistant. "
+                    "Only report grounded observations from the image."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
+                    },
+                ],
+            },
+        ],
+        max_tokens=220,
+    )
+    content = (response.choices[0].message.content or "").strip()
+    if not content:
+        raise ValueError("Photo analysis returned empty text")
+    return content
 
 
 async def _extract_message_text(
@@ -407,6 +566,63 @@ def _build_memory_capture_prompt(text: str) -> str:
     )
 
 
+def _build_attachment_capture_prompt(
+    vault_relative_path: str,
+    attachment: AttachmentPayload,
+) -> str:
+    daily_path = today_daily_note_path()
+    caption = (attachment.caption or "").strip()
+    caption_line = f"- User caption: {caption}\n" if caption else ""
+    return (
+        "A user sent a file attachment that was already saved to the vault.\n\n"
+        "Do not rewrite or move the file.\n"
+        f"- Saved attachment path: {vault_relative_path}\n"
+        f"- Original filename: {attachment.file_name}\n"
+        f"- MIME type: {attachment.mime_type}\n"
+        f"- File size in bytes: {attachment.file_size}\n"
+        f"- Received at (UTC): {attachment.captured_at.astimezone(timezone.utc).isoformat()}\n"
+        f"{caption_line}"
+        f"- Daily note target path: {daily_path}\n\n"
+        "Required actions:\n"
+        "1) Read or create today's daily note at the target path.\n"
+        "2) Ensure there is a `## Attachments` section (create it if missing).\n"
+        "3) Append a single bullet in that section using this exact markdown link format:\n"
+        f"   - [{attachment.file_name}]({vault_relative_path})\n"
+        "4) Keep any caption text short and optional in the same bullet.\n"
+        "5) Confirm what was written and where.\n"
+    )
+
+
+def _build_photo_capture_prompt(
+    vault_relative_path: str,
+    attachment: AttachmentPayload,
+    core_info: str,
+) -> str:
+    daily_path = today_daily_note_path()
+    caption = (attachment.caption or "").strip()
+    caption_line = f"- User caption: {caption}\n" if caption else ""
+    return (
+        "A user sent a photo that was already saved to the vault.\n\n"
+        "Do not rewrite or move the image file.\n"
+        f"- Saved image path: {vault_relative_path}\n"
+        f"- Original filename: {attachment.file_name}\n"
+        f"- MIME type: {attachment.mime_type}\n"
+        f"- File size in bytes: {attachment.file_size}\n"
+        f"- Received at (UTC): {attachment.captured_at.astimezone(timezone.utc).isoformat()}\n"
+        f"{caption_line}"
+        f"- Daily note target path: {daily_path}\n\n"
+        "Core info extracted from the image:\n"
+        f"{core_info}\n\n"
+        "Required actions:\n"
+        "1) Read or create today's daily note at the target path.\n"
+        "2) Ensure there is a `## Attachments` section and append this exact link bullet:\n"
+        f"   - [{attachment.file_name}]({vault_relative_path})\n"
+        "3) Ensure there is a `## Notes` section and append a concise bullet that summarizes the extracted core info from the image.\n"
+        "4) Keep the summary factual and short; do not invent details beyond the extracted info.\n"
+        "5) Confirm what was written and where.\n"
+    )
+
+
 # --- Command Handlers ---
 
 
@@ -489,6 +705,68 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 @_require_auth
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    photo_attachment = await _download_photo_attachment(update)
+    if photo_attachment:
+        await update.message.chat.send_action(ChatAction.TYPING)
+        settings: Settings = context.application.bot_data["settings"]
+        agent: CompiledStateGraph = context.application.bot_data["agent"]
+        client: AsyncAzureOpenAI = context.application.bot_data["openai_client"]
+        try:
+            vault_relative_path = _persist_attachment_to_vault(
+                settings, photo_attachment
+            )
+            core_info = await _analyze_photo_with_azure(
+                client=client,
+                deployment=settings.azure_openai_deployment,
+                photo_bytes=photo_attachment.file_bytes,
+                mime_type=photo_attachment.mime_type,
+                caption=photo_attachment.caption,
+            )
+            prompt = _build_photo_capture_prompt(
+                vault_relative_path=vault_relative_path,
+                attachment=photo_attachment,
+                core_info=core_info,
+            )
+            response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+            await _send_response(update, response)
+        except Exception:
+            logger.exception(
+                "Photo attachment processing failed",
+                user_id=update.effective_user.id if update.effective_user else None,
+                file_name=photo_attachment.file_name,
+                mime_type=photo_attachment.mime_type,
+                byte_size=photo_attachment.file_size,
+            )
+            await _reply_with_typing(
+                update,
+                "I couldn't store that photo. Please try sending it again.",
+            )
+        return
+
+    attachment = await _download_non_audio_document(update)
+    if attachment:
+        await update.message.chat.send_action(ChatAction.TYPING)
+        settings: Settings = context.application.bot_data["settings"]
+        agent: CompiledStateGraph = context.application.bot_data["agent"]
+        try:
+            vault_relative_path = _persist_attachment_to_vault(settings, attachment)
+            prompt = _build_attachment_capture_prompt(vault_relative_path, attachment)
+            response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+            await _send_response(update, response)
+        except Exception:
+            logger.exception(
+                "Attachment processing failed",
+                user_id=update.effective_user.id if update.effective_user else None,
+                file_name=attachment.file_name,
+                mime_type=attachment.mime_type,
+                byte_size=attachment.file_size,
+            )
+            await _reply_with_typing(
+                update,
+                "I couldn't store that attachment. Please try sending it again.",
+            )
+        return
+
     text = await _extract_message_text(update, context)
     if not text:
         return
@@ -523,9 +801,16 @@ def build_application(settings: Settings) -> Application:
     app.add_handler(CommandHandler("read", cmd_read))
     app.add_handler(CommandHandler("status", cmd_status))
 
-    # Natural language and audio fallback (non-command text/voice/audio/audio-docs)
+    # Natural language, audio, photos, and non-audio file attachments
     message_filter = (
-        (filters.TEXT | filters.VOICE | filters.AUDIO | filters.Document.AUDIO)
+        (
+            filters.TEXT
+            | filters.VOICE
+            | filters.AUDIO
+            | filters.PHOTO
+            | filters.Document.AUDIO
+            | filters.Document.ALL
+        )
         & ~filters.COMMAND
     )
     app.add_handler(MessageHandler(message_filter, handle_message))

@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     url_allowed_domains: str = ""
     url_blocked_domains: str = ""
     link_notes_folder: str = "Links"
+    attachments_folder: str = "Attachments"
 
     # Timezone
     user_timezone: str = "UTC"
@@ -76,6 +77,17 @@ class Settings(BaseSettings):
         if normalized not in allowed:
             raise ValueError("URL_EXTRACTOR_BACKEND must be one of: crawl4ai")
         return normalized
+
+    @field_validator("link_notes_folder", "attachments_folder", mode="after")
+    @classmethod
+    def validate_vault_relative_folder(cls, v: str) -> str:
+        normalized = v.strip().replace("\\", "/").strip("/")
+        if not normalized:
+            raise ValueError("Folder path cannot be empty")
+        parts = [part for part in normalized.split("/") if part]
+        if any(part == ".." for part in parts):
+            raise ValueError("Folder path cannot contain '..'")
+        return "/".join(parts)
 
     @field_validator(
         "url_extraction_max_urls_per_message",

@@ -126,6 +126,8 @@ docker compose up -d --build
 
 Any other text message is treated as a natural language instruction.
 Voice notes and audio files are transcribed with Azure OpenAI Whisper and then processed as natural language.
+Document attachments (for example PDF and office files) are saved into the vault under `Attachments/YYYY/MM/` and linked from today's daily note in an `## Attachments` section.
+Photo messages are also saved into the vault under `Attachments/YYYY/MM/`, parsed by the multimodal model, and summarized into today's daily note (with the photo link under `## Attachments`).
 
 Default natural-language behavior:
 - Messages containing one or more URLs are automatically parsed via Crawl4AI and stored as dedicated link notes with backlinks in today's note.
@@ -156,6 +158,7 @@ All configuration is via environment variables (`.env` file). See `.env.example`
 | `URL_ALLOWED_DOMAINS` | No | empty | Optional comma-separated allowlist; when set, only these domains are processed |
 | `URL_BLOCKED_DOMAINS` | No | empty | Optional comma-separated blocklist for domains |
 | `LINK_NOTES_FOLDER` | No | `Links` | Vault folder root where dedicated captured-link notes are written |
+| `ATTACHMENTS_FOLDER` | No | `Attachments` | Vault folder root where inbound Telegram document attachments are stored |
 
 ## Project Structure
 
