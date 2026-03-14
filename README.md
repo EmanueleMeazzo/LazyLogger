@@ -193,7 +193,7 @@ LazyLogger/
 
 **Agent crashes with `SettingsError`**: Check your `.env` — all required variables must be set. `TELEGRAM_AUTHORIZED_USERS` should be plain usernames (e.g., `alice,bob`), not JSON.
 
-**obsidian-sync unhealthy**: Run `docker compose logs obsidian-sync` — likely needs `ob login` (see step 2 above). The healthcheck waits up to 60s for the first sync to create `/vault/.obsidian`.
+**obsidian-sync unhealthy**: Run `docker compose logs obsidian-sync` — likely needs `ob login` (see step 2 above). Health is based on whether `ob sync --continuous --path /vault` is running, with a startup grace period.
 
 If logs show `Another sync instance is already running for this vault.` repeatedly, a stale lock file is likely blocking startup.
 Run:
