@@ -195,6 +195,14 @@ LazyLogger/
 
 **obsidian-sync unhealthy**: Run `docker compose logs obsidian-sync` — likely needs `ob login` (see step 2 above). The healthcheck waits up to 60s for the first sync to create `/vault/.obsidian`.
 
+If logs show `Another sync instance is already running for this vault.` repeatedly, a stale lock file is likely blocking startup.
+Run:
+- `docker compose down`
+- `docker run --rm -v lazylogger_obsidian-config:/cfg alpine sh -lc 'find /cfg -type f \( -name "*.lock" -o -name ".lock" -o -name "lock" \) -print -delete'`
+- `docker compose up -d --build`
+
+The sync container entrypoint also cleans stale lock files at boot in recent versions.
+
 **Agent returns "I'm having trouble thinking"**: Set `LOG_LEVEL=DEBUG` and check `docker compose logs -f agent` to see tool calls and LLM responses.
 
 **Azure OpenAI 404**: The `AZURE_OPENAI_DEPLOYMENT` must match the exact deployment name in your Azure portal (not the model name).
