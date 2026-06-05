@@ -8,8 +8,12 @@ services:
       - obsidian-config:/root/.config/obsidian-headless
     environment:
       - OBSIDIAN_AUTH_TOKEN=${OBSIDIAN_AUTH_TOKEN:-}
+    # Give ob time to disconnect cleanly (release its sync session) before SIGKILL.
+    stop_grace_period: 30s
     healthcheck:
-      test: ["CMD-SHELL", "tr '\\0' ' ' < /proc/1/cmdline | grep -q 'ob sync --continuous --path /vault'"]
+      # ob now runs as a child of entrypoint.sh (PID 1 is the shell), so scan
+      # every process's cmdline rather than only PID 1.
+      test: ["CMD-SHELL", "for f in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < \"$$f\" 2>/dev/null | grep -q 'ob sync --continuous --path /vault' && exit 0; done; exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
