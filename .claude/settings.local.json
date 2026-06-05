@@ -18,7 +18,8 @@
       "Bash(npm view:*)",
       "mcp__ide__getDiagnostics",
       "Bash(python:*)",
-      "Bash(uv run:*)"
+      "Bash(uv run:*)",
+      "WebFetch(domain:obsidian.md)"
     ]
   }
 }

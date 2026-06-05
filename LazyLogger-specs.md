@@ -176,7 +176,6 @@ async with MultiServerMCPClient(
 - **Provider**: Azure OpenAI
 - **Model**: `gpt-5` (or configurable via env var)
 - **Tested with**: `gpt-5`
-- **Temperature**: 0.3 (for reliable tool use)
 - **Max tokens**: 4096
 - **Configuration** via `langchain-openai`:
   ```python
@@ -335,7 +334,6 @@ MCP_API_KEY=<generated-secret>
 # === Agent ===
 SYSTEM_PROMPT_PATH=/app/system_prompt.md
 CONVERSATION_HISTORY_LIMIT=20
-LLM_TEMPERATURE=0.3
 LLM_MAX_TOKENS=4096
 LOG_LEVEL=INFO
 ```
@@ -363,7 +361,6 @@ class Settings(BaseSettings):
     # Agent
     system_prompt_path: str = "/app/system_prompt.md"
     conversation_history_limit: int = 20
-    llm_temperature: float = 0.3
     llm_max_tokens: int = 4096
     log_level: str = "INFO"
 
