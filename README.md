@@ -104,13 +104,44 @@ docker compose logs -f obsidian-sync
 
 Then send `/start` to your bot on Telegram. Try: "Create a note for today: hello world!"
 
-### 6. Updating
+### 6. Updating / Deploying to the VPS
 
-After pulling code changes:
+Code changes are deployed by pushing to the repo, then pulling and rebuilding
+on the VPS over SSH. From your machine, push the commit:
 
 ```bash
-git pull
-docker compose up -d --build
+git push origin main
+```
+
+Then on the VPS:
+
+```bash
+ssh <user>@<vps-host>
+cd ~/LazyLogger
+git pull                       # fetch the new commit(s)
+docker compose up -d --build   # rebuild changed images + recreate changed services
+```
+
+`docker compose up -d --build` is the whole deploy: it rebuilds any image whose
+`Dockerfile`/context changed (e.g. `obsidian-sync` when `entrypoint.sh` changes),
+recreates services whose `docker-compose.yml` config changed, and leaves the rest
+running. Your `.env` and the `vault-data` / `obsidian-config` volumes are untouched.
+
+Verify the rollout:
+
+```bash
+docker compose ps                       # both services Up (healthy)
+docker compose logs -f obsidian-sync    # should reach "Fully synced", no error loop
+docker compose logs -f agent            # agent started and tools loaded
+```
+
+To confirm `obsidian-sync` shuts down gracefully (releases its sync session
+instead of being SIGKILLed):
+
+```bash
+docker compose stop obsidian-sync
+docker inspect obsidian-sync --format '{{.State.ExitCode}}'   # expect 0, not 137
+docker compose up -d obsidian-sync
 ```
 
 ## Telegram Commands
@@ -193,7 +224,7 @@ LazyLogger/
 
 **Agent crashes with `SettingsError`**: Check your `.env` — all required variables must be set. `TELEGRAM_AUTHORIZED_USERS` should be plain usernames (e.g., `alice,bob`), not JSON.
 
-**obsidian-sync unhealthy**: Run `docker compose logs obsidian-sync` — likely needs `ob login` (see step 2 above). Health is based on whether PID 1 is running `ob sync --continuous --path /vault`, with a short startup grace period.
+**obsidian-sync unhealthy**: Run `docker compose logs obsidian-sync` — likely needs `ob login` (see step 2 above). Health is based on whether an `ob sync --continuous --path /vault` process is running (it runs as a child of the entrypoint, which supervises and restarts it), with a short startup grace period.
 
 If `docker compose up` stays in `waiting` for a while, run:
 - `docker compose ps`
@@ -202,13 +233,12 @@ If `docker compose up` stays in `waiting` for a while, run:
 
 `waiting` usually means Compose is waiting for the healthcheck gate before starting `agent`.
 
-If logs show `Another sync instance is already running for this vault.` repeatedly, a stale lock file is likely blocking startup.
-Run:
+If logs show `Another sync instance is already running for this vault.` repeatedly, a previous sync session hasn't been released yet (common right after a restart). The entrypoint now retries with exponential backoff and forwards stop signals so `ob` disconnects cleanly, so this should self-recover within a minute or two rather than hammer-restarting. If it stays stuck, a stale lock is jammed in the `obsidian-config` volume — clear it manually:
 - `docker compose down`
-- `docker run --rm -v lazylogger_obsidian-config:/cfg alpine sh -lc 'find /cfg -type f \( -name "*.lock" -o -name ".lock" -o -name "lock" \) -print -delete'`
+- `docker run --rm -v lazylogger_obsidian-config:/cfg alpine sh -lc 'find /cfg \( -name "*.lock" -o -name ".lock" -o -name "lock" \) -print -exec rm -rf {} +'`
 - `docker compose up -d --build`
 
-The sync container entrypoint also cleans stale lock files at boot in recent versions.
+The sync container entrypoint also cleans stale lock files (including lock *directories*) at boot.
 
 **Agent returns "I'm having trouble thinking"**: Set `LOG_LEVEL=DEBUG` and check `docker compose logs -f agent` to see tool calls and LLM responses.
 
