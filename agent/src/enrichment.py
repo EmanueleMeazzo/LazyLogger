@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Callable, Generic, TypeVar
 
 import structlog
 
-from .utils import sanitize_note_name
+from .utils import sanitize_note_name, split_frontmatter
 
 if TYPE_CHECKING:
     from openai import AsyncAzureOpenAI
@@ -28,7 +28,6 @@ _T = TypeVar("_T")
 
 # A leading `#tag` (not a markdown heading like `## Notes`, which is `#` + `#` + space).
 _INLINE_TAG_RE = re.compile(r"(?:^|\s)#([A-Za-z0-9][\w/-]*)")
-_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
 # A top-level `# Heading` (single hash + space) — used to read an entity note's name.
 _H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 
@@ -78,17 +77,9 @@ class ResolvedEntity:
     is_new: bool
 
 
-def _split_frontmatter(text: str) -> tuple[str, str]:
-    """Split a note into ``(frontmatter_text, body)``; ``("", text)`` when none."""
-    fm_match = _FRONTMATTER_RE.match(text)
-    if fm_match:
-        return fm_match.group(1), text[fm_match.end():]
-    return "", text
-
-
 def _extract_tags_from_markdown(text: str) -> list[str]:
     """Collect frontmatter `tags:` plus inline `#tags` from one note's text."""
-    frontmatter, body = _split_frontmatter(text)
+    frontmatter, body = split_frontmatter(text)
     tags = _fm_list(frontmatter, "tags")
     tags.extend(_INLINE_TAG_RE.findall(body))
     return [t.strip().lower() for t in tags if t.strip()]
@@ -201,7 +192,7 @@ def resolve_entities(
 
 def _entity_names(text: str) -> list[str]:
     """Canonical name (first `# ` H1) plus frontmatter `aliases` for one entity note."""
-    frontmatter, body = _split_frontmatter(text)
+    frontmatter, body = split_frontmatter(text)
     names: list[str] = []
     h1 = _H1_RE.search(body)
     if h1:

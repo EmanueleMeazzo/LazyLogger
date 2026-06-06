@@ -22,6 +22,7 @@ from .config import Settings
 from .enrichment import EntityCatalog, TaxonomyCache
 from .link_extractor import LinkExtractor
 from .mcp_client import create_mcp_client
+from .smart_search import build_smart_search_tool
 from .telegram_bot import build_application
 
 logger = structlog.get_logger()
@@ -76,7 +77,10 @@ async def async_main() -> None:
     logger.info("Connecting to MCP server...")
     mcp_client = create_mcp_client(settings)
     tools = await mcp_client.get_tools()
-    logger.info("MCP tools loaded", tool_count=len(tools), tools=[t.name for t in tools])
+    # Local structured-retrieval tool, alongside the MCP tools. build_agent's
+    # loop sets handle_tool_error=True on it too (it's a StructuredTool).
+    tools.append(build_smart_search_tool(settings))
+    logger.info("Tools loaded", tool_count=len(tools), tools=[t.name for t in tools])
 
     # Persistent conversation memory: a SQLite-backed checkpointer that survives
     # restarts. The connection is an async context manager owned here for the

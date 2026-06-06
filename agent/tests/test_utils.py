@@ -1,10 +1,12 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 from src.utils import (
     format_local_time,
+    parse_frontmatter,
     sanitize_note_name,
     slugify,
+    split_frontmatter,
     split_message,
     today_daily_note_path,
     today_daily_note_stem,
@@ -143,6 +145,47 @@ class TestSanitizeNoteName:
         assert not sanitize_note_name("A" * 79 + " Bcd").endswith((" ", "."))
         assert not sanitize_note_name("X" * 79 + ".abc").endswith((" ", "."))
         assert len(sanitize_note_name("A" * 200)) == 80
+
+
+class TestSplitFrontmatter:
+    def test_splits_block_and_body(self):
+        fm, body = split_frontmatter("---\ntype: daily\n---\nbody text\n")
+        assert fm == "type: daily"
+        assert body.strip() == "body text"
+
+    def test_no_frontmatter_returns_whole_text_as_body(self):
+        assert split_frontmatter("just a body") == ("", "just a body")
+
+
+class TestParseFrontmatter:
+    def test_inline_list(self):
+        assert parse_frontmatter("---\ntags: [a, b]\n---\nbody")["tags"] == ["a", "b"]
+
+    def test_block_list(self):
+        assert parse_frontmatter("---\ntags:\n  - a\n  - b\n---\n")["tags"] == ["a", "b"]
+
+    def test_scalar(self):
+        assert parse_frontmatter("---\ntype: daily\n---\n")["type"] == "daily"
+
+    def test_date_parses_to_date_object(self):
+        # PyYAML coerces an unquoted ISO date; the search layer normalizes it.
+        assert parse_frontmatter("---\ndate: 2026-06-06\n---\n")["date"] == date(2026, 6, 6)
+
+    def test_empty_value_is_none(self):
+        # `tags:` with no value yields None; callers must coerce to [].
+        assert parse_frontmatter("---\ntags:\n---\n") == {"tags": None}
+
+    def test_malformed_yaml_returns_empty(self):
+        assert parse_frontmatter("---\ntags: [unclosed\n---\n") == {}
+
+    def test_no_frontmatter_returns_empty(self):
+        assert parse_frontmatter("# Just a heading\nbody") == {}
+
+    def test_non_dict_top_level_returns_empty(self):
+        assert parse_frontmatter("---\n- a\n- b\n---\n") == {}
+
+    def test_empty_block_returns_empty(self):
+        assert parse_frontmatter("---\n\n---\nbody") == {}
 
 
 class TestFormatLocalTime:

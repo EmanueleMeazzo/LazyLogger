@@ -867,7 +867,12 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _reply_with_typing(update, "Usage: /search <query>")
         return
 
-    await _invoke_and_reply(update, context, f"Search the vault for: {query}")
+    await _invoke_and_reply(
+        update,
+        context,
+        f"Find notes matching: {query}. Use structured filters "
+        "(person/project/tag/type/date/section) when the query implies them.",
+    )
 
 
 @_require_auth

@@ -63,6 +63,42 @@ class TestSettings:
             assert s.attachments_folder == "Attachments"
             assert s.get_authorized_users() == {"alice"}
 
+    def test_smart_search_defaults(self):
+        env = {
+            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com/",
+            "AZURE_OPENAI_API_KEY": "test-key",
+            "TELEGRAM_BOT_TOKEN": "test-token",
+            "TELEGRAM_AUTHORIZED_USERS": "alice",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            s = Settings(_env_file=None)
+            assert s.smart_search_max_results == 5
+            assert s.smart_search_scan_limit == 5000
+
+    def test_smart_search_max_results_must_be_positive(self):
+        env = {
+            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com/",
+            "AZURE_OPENAI_API_KEY": "test-key",
+            "TELEGRAM_BOT_TOKEN": "test-token",
+            "TELEGRAM_AUTHORIZED_USERS": "alice",
+            "SMART_SEARCH_MAX_RESULTS": "0",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with pytest.raises(ValueError, match="positive integer"):
+                Settings(_env_file=None)
+
+    def test_smart_search_scan_limit_must_be_positive(self):
+        env = {
+            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com/",
+            "AZURE_OPENAI_API_KEY": "test-key",
+            "TELEGRAM_BOT_TOKEN": "test-token",
+            "TELEGRAM_AUTHORIZED_USERS": "alice",
+            "SMART_SEARCH_SCAN_LIMIT": "0",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with pytest.raises(ValueError, match="positive integer"):
+                Settings(_env_file=None)
+
     def test_validate_url_backend_raises_for_invalid_value(self):
         with pytest.raises(ValueError, match="URL_EXTRACTOR_BACKEND"):
             Settings.validate_url_extractor_backend("unsupported")

@@ -5,12 +5,16 @@ import re
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+import yaml
+
 # Telegram message length limit
 TELEGRAM_MAX_LENGTH = 4096
 
 _SLUG_STRIP_RE = re.compile(r"[^a-z0-9]+")
 # Characters illegal in a filename or an Obsidian `[[wikilink]]` target.
 _ILLEGAL_NOTE_NAME_RE = re.compile(r'[\\/:*?"<>|#^\[\]]+')
+# A leading `---\n … \n---` YAML frontmatter block at the very top of a note.
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
 
 
 def split_message(text: str, max_length: int = TELEGRAM_MAX_LENGTH) -> list[str]:
@@ -95,6 +99,34 @@ def slugify(text: str, fallback: str = "note", max_len: int = 60) -> str:
     if not normalized:
         return fallback
     return normalized[:max_len]
+
+
+def split_frontmatter(text: str) -> tuple[str, str]:
+    """Split a note into ``(frontmatter_text, body)``; ``("", text)`` when none."""
+    fm_match = _FRONTMATTER_RE.match(text)
+    if fm_match:
+        return fm_match.group(1), text[fm_match.end():]
+    return "", text
+
+
+def parse_frontmatter(text: str) -> dict:
+    """Parse a note's YAML frontmatter into a dict; always returns a dict.
+
+    Robust against the messy reality of vault notes: an absent or empty block,
+    malformed YAML, or a top-level scalar/list all collapse to ``{}``. Scalars
+    (``type``/``created``/``date``/``url``…) and lists (``tags``/``people``…)
+    come back natively — strictly more than :func:`enrichment._fm_list`, which
+    only reads lists. Note that ``date``/``created`` may surface as
+    ``datetime.date``/``datetime.datetime`` (PyYAML coerces unquoted timestamps).
+    """
+    frontmatter = split_frontmatter(text)[0].strip()
+    if not frontmatter:
+        return {}
+    try:
+        parsed = yaml.safe_load(frontmatter)
+    except yaml.YAMLError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def sanitize_note_name(name: str, fallback: str = "untitled", max_len: int = 80) -> str:

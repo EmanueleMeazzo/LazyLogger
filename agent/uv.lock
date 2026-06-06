@@ -1189,6 +1189,8 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-telegram-bot" },
+    { name = "pyyaml" },
+    { name = "rank-bm25" },
     { name = "structlog" },
     { name = "tzdata" },
 ]
@@ -1211,6 +1213,8 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "python-telegram-bot", specifier = ">=22.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "rank-bm25", specifier = ">=0.2.2" },
     { name = "structlog", specifier = ">=24.0" },
     { name = "tzdata", specifier = ">=2025.3" },
 ]

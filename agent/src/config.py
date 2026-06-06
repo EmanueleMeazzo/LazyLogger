@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     task_extraction_enabled: bool = True
     tasks_moc_path: str = "Tasks/Tasks.md"
 
+    # Smart vault search (structured retrieval tool)
+    smart_search_max_results: int = 5
+    smart_search_scan_limit: int = 5000
+
     # URL extraction
     url_extraction_enabled: bool = True
     url_extractor_backend: str = "crawl4ai"
@@ -120,6 +124,8 @@ class Settings(BaseSettings):
         "taxonomy_scan_limit",
         "taxonomy_cache_ttl_seconds",
         "entity_cache_ttl_seconds",
+        "smart_search_max_results",
+        "smart_search_scan_limit",
         mode="after",
     )
     @classmethod
