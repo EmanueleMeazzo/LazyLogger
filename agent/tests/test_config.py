@@ -1,4 +1,5 @@
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -37,16 +38,20 @@ class TestSettings:
                 os.environ.pop(k, None)
 
     def test_defaults(self):
-        """Verify default values without loading .env."""
+        """Verify in-code default values in a clean environment.
+
+        Uses ``clear=True`` so that ambient OS environment variables (e.g. a
+        developer's exported ``AZURE_OPENAI_DEPLOYMENT``) cannot leak in and
+        shadow the field defaults this test is asserting. ``_env_file=None``
+        additionally keeps the repo ``.env`` out of the picture.
+        """
         env = {
             "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com/",
             "AZURE_OPENAI_API_KEY": "test-key",
             "TELEGRAM_BOT_TOKEN": "test-token",
             "TELEGRAM_AUTHORIZED_USERS": "alice",
         }
-        for k, v in env.items():
-            os.environ[k] = v
-        try:
+        with patch.dict(os.environ, env, clear=True):
             s = Settings(_env_file=None)
             assert s.azure_openai_deployment == "gpt-5"
             assert s.azure_openai_transcription_deployment == "whisper-1"
@@ -57,9 +62,6 @@ class TestSettings:
             assert s.url_extraction_max_urls_per_message == 3
             assert s.attachments_folder == "Attachments"
             assert s.get_authorized_users() == {"alice"}
-        finally:
-            for k in env:
-                os.environ.pop(k, None)
 
     def test_validate_url_backend_raises_for_invalid_value(self):
         with pytest.raises(ValueError, match="URL_EXTRACTOR_BACKEND"):

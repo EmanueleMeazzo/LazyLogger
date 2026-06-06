@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -18,7 +19,7 @@ from openai import AsyncAzureOpenAI
 
 from .agent import build_agent, load_system_prompt
 from .config import Settings
-from .enrichment import TaxonomyCache
+from .enrichment import EntityCatalog, TaxonomyCache
 from .link_extractor import LinkExtractor
 from .mcp_client import create_mcp_client
 from .telegram_bot import build_application
@@ -60,6 +61,11 @@ async def start_health_server(port: int) -> web.AppRunner:
 
 async def async_main() -> None:
     settings = Settings()
+    # utils.* resolve the timezone from os.environ, but pydantic-settings does not
+    # export .env keys to the process env. Publish the validated value so local
+    # `uv run` (USER_TIMEZONE only in .env) gets correct daily-note paths and
+    # [HH:MM] capture-time prefixes. No-op in Docker, where compose injects it.
+    os.environ["USER_TIMEZONE"] = settings.user_timezone
     setup_logging(settings.log_level)
     logger.info("Starting LazyLogger agent...")
 
@@ -100,6 +106,11 @@ async def async_main() -> None:
         settings.mcp_vault_path,
         settings.taxonomy_scan_limit,
         settings.taxonomy_cache_ttl_seconds,
+    )
+    telegram_app.bot_data["entity_catalog"] = EntityCatalog(
+        settings.mcp_vault_path,
+        settings.entities_folder,
+        settings.entity_cache_ttl_seconds,
     )
 
     # Start health server

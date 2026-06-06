@@ -24,8 +24,13 @@ from telegram.ext import (
     filters,
 )
 
-from .enrichment import EnrichmentResult, enrich_capture
-from .utils import split_message, today_daily_note_path
+from .enrichment import EnrichmentResult, ResolvedEntity, enrich_capture, resolve_entities
+from .utils import (
+    format_local_time,
+    split_message,
+    today_daily_note_path,
+    today_daily_note_stem,
+)
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -499,7 +504,15 @@ async def _process_user_text(
 
     if not _is_direct_request(text):
         enrichment = await _maybe_enrich(context, text)
-        prompt = _build_memory_capture_prompt(text, enrichment.tags)
+        suggested_tags, entities, tasks = _resolve_capture_extras(context, enrichment)
+        prompt = _build_memory_capture_prompt(
+            text,
+            suggested_tags,
+            entities,
+            tasks,
+            settings.tasks_moc_path,
+            update.message.date if update.message else None,
+        )
         response = await _invoke_agent(agent, update.effective_chat.id, prompt)
         await _send_response(update, response)
         return
@@ -597,13 +610,61 @@ def _format_suggested_tags(tags: list[str] | None) -> str:
     )
 
 
+def _merge_tag_suggestions(tags: list[str], topics: list[str]) -> list[str]:
+    """Fold extracted topics into the tag suggestions (lowercased, order-preserving)."""
+    normalized = (value.strip().lower() for value in (*tags, *topics))
+    return list(dict.fromkeys(value for value in normalized if value))
+
+
+def _format_entities(entities: list[ResolvedEntity] | None, daily_stem: str) -> str:
+    """Instruction block telling the agent to create/append entity hub notes."""
+    if not entities:
+        return ""
+    lines = [
+        "\nEntities detected in this capture — connect them into the graph:",
+    ]
+    for entity in entities:
+        if entity.is_new:
+            action = (
+                "create the entity note (frontmatter type: entity, entity_type: "
+                f"{entity.entity_type}, plus a `# {entity.name}` heading and a `## Mentions` section)"
+            )
+        else:
+            action = "open the existing entity note"
+        lines.append(
+            f"- {entity.entity_type} \"{entity.name}\": {action} at `{entity.path}`, then "
+            f"append a `## Mentions` bullet `- [[{daily_stem}]] — <short context>` (never duplicate one)."
+        )
+    inline = ", ".join(f"[[{entity.name}]]" for entity in entities)
+    lines.append(
+        f"In today's daily note, wikilink these inline in the memory bullet ({inline}) and merge "
+        "their names into the daily-note frontmatter `people`/`projects` lists with "
+        "update_frontmatter (merge: true)."
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _format_tasks(tasks: list[str] | None, daily_stem: str, moc_path: str | None) -> str:
+    """Instruction block for writing extracted to-dos into the day + the Tasks MOC."""
+    if not tasks:
+        return ""
+    rendered = "\n".join(f"  - {task}" for task in tasks)
+    return (
+        f"\nAction items to record as tasks:\n{rendered}\n"
+        f"For each, append `- [ ] <task>  (from [[{daily_stem}]])` under today's "
+        f"`{SECTION_TASKS}` section, and also append `- [ ] <task> — [[{daily_stem}]]` under the "
+        f"`## Open` section of the tasks map at `{moc_path}` (create that note with an `## Open` "
+        "heading if it does not exist). Do not duplicate a task that is already listed.\n"
+    )
+
+
 async def _maybe_enrich(
     context: ContextTypes.DEFAULT_TYPE,
     text: str,
 ) -> EnrichmentResult:
-    """Best-effort capture enrichment (tags); never blocks the capture flow."""
+    """Best-effort capture enrichment (tags/people/projects/tasks); never blocks capture."""
     settings: Settings = context.application.bot_data["settings"]
-    if not settings.auto_tagging_enabled:
+    if not settings.enrichment_enabled:
         return EnrichmentResult()
 
     cleaned = _strip_transcribed_prefix(text)
@@ -612,28 +673,67 @@ async def _maybe_enrich(
 
     client: AsyncAzureOpenAI = context.application.bot_data["openai_client"]
     taxonomy_cache = context.application.bot_data.get("taxonomy_cache")
+    entity_catalog = context.application.bot_data.get("entity_catalog")
     taxonomy = await asyncio.to_thread(taxonomy_cache.get) if taxonomy_cache else []
+    existing_entities = (
+        await asyncio.to_thread(entity_catalog.get) if entity_catalog else None
+    )
     return await enrich_capture(
         client,
         settings.azure_openai_deployment,
         cleaned,
         taxonomy,
+        existing_entities,
     )
 
 
-def _build_memory_capture_prompt(text: str, suggested_tags: list[str] | None = None) -> str:
+def _resolve_capture_extras(
+    context: ContextTypes.DEFAULT_TYPE,
+    enrichment: EnrichmentResult,
+) -> tuple[list[str], list[ResolvedEntity], list[str]]:
+    """Turn an enrichment result into (suggested_tags, entities, tasks), honoring flags."""
+    settings: Settings = context.application.bot_data["settings"]
+    suggested_tags = _merge_tag_suggestions(enrichment.tags, enrichment.topics)
+    entities = (
+        resolve_entities(enrichment, settings.entities_folder, settings.mcp_vault_path)
+        if settings.entity_linking_enabled
+        else []
+    )
+    tasks = enrichment.tasks if settings.task_extraction_enabled else []
+    return suggested_tags, entities, tasks
+
+
+def _build_memory_capture_prompt(
+    text: str,
+    suggested_tags: list[str] | None = None,
+    entities: list[ResolvedEntity] | None = None,
+    tasks: list[str] | None = None,
+    moc_path: str | None = None,
+    captured_at: datetime | None = None,
+) -> str:
     daily_path = today_daily_note_path()
+    daily_stem = today_daily_note_stem()
+    time_hint = (
+        "Capture time (use it as the bullet's `[HH:MM]` prefix; do not invent a time): "
+        f"{format_local_time(captured_at)}\n"
+        if captured_at
+        else ""
+    )
     return (
         "Treat this user message as a memory entry to store, not as a question to answer.\n\n"
         f"Daily note target path: {daily_path}\n"
+        f"{time_hint}"
         "Required actions:\n"
         "1) Read or create today's daily note at the target path. When creating it, use the daily "
         "note template (including the YAML frontmatter: type, created, source, date, day, tags).\n"
-        f"2) Append this message under `{SECTION_NOTES}` as a concise bullet memory with a timestamp.\n"
-        "3) Do not perform extra tasks unless explicitly requested.\n"
-        "4) Confirm the memory was stored.\n"
-        f"{_format_suggested_tags(suggested_tags)}\n"
-        "Memory content:\n"
+        f"2) Append the message under `{SECTION_NOTES}` as a concise bullet memory.\n"
+        "3) Then apply only the tagging/entity/task instructions below (if any); take no other "
+        "actions on the memory's content.\n"
+        "4) Confirm briefly what you stored.\n"
+        f"{_format_suggested_tags(suggested_tags)}"
+        f"{_format_entities(entities, daily_stem)}"
+        f"{_format_tasks(tasks, daily_stem, moc_path)}"
+        "\nMemory content:\n"
         f"{text.strip()}"
     )
 
@@ -671,10 +771,20 @@ def _build_photo_capture_prompt(
     attachment: AttachmentPayload,
     core_info: str,
     suggested_tags: list[str] | None = None,
+    entities: list[ResolvedEntity] | None = None,
+    tasks: list[str] | None = None,
+    moc_path: str | None = None,
 ) -> str:
     daily_path = today_daily_note_path()
+    daily_stem = today_daily_note_stem()
     caption = (attachment.caption or "").strip()
     caption_line = f"- User caption: {caption}\n" if caption else ""
+    time_hint = (
+        "Capture time (use it as the Notes bullet's `[HH:MM]` prefix; do not invent a time): "
+        f"{format_local_time(attachment.captured_at)}\n"
+        if attachment.captured_at
+        else ""
+    )
     return (
         "A user sent a photo that was already saved to the vault.\n\n"
         "Do not rewrite or move the image file.\n"
@@ -684,7 +794,8 @@ def _build_photo_capture_prompt(
         f"- File size in bytes: {attachment.file_size}\n"
         f"- Received at (UTC): {attachment.captured_at.astimezone(timezone.utc).isoformat()}\n"
         f"{caption_line}"
-        f"- Daily note target path: {daily_path}\n\n"
+        f"- Daily note target path: {daily_path}\n"
+        f"{time_hint}\n"
         "Core info extracted from the image:\n"
         f"{core_info}\n\n"
         "Required actions:\n"
@@ -692,10 +803,12 @@ def _build_photo_capture_prompt(
         "template YAML frontmatter: type, created, source, date, day, tags).\n"
         f"2) Ensure there is a `{SECTION_ATTACHMENTS}` section and append this exact link bullet:\n"
         f"   - [{attachment.file_name}]({vault_relative_path})\n"
-        f"3) Ensure there is a `{SECTION_NOTES}` section and append a concise bullet that summarizes the extracted core info from the image.\n"
+        f"3) Ensure there is a `{SECTION_NOTES}` section and append a concise bullet, prefixed with the `[HH:MM]` capture time above, that summarizes the extracted core info from the image.\n"
         "4) Keep the summary factual and short; do not invent details beyond the extracted info.\n"
         "5) Confirm what was written and where.\n"
         f"{_format_suggested_tags(suggested_tags)}"
+        f"{_format_entities(entities, daily_stem)}"
+        f"{_format_tasks(tasks, daily_stem, moc_path)}"
     )
 
 
@@ -804,11 +917,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context,
                 f"{photo_attachment.caption or ''}\n{core_info}".strip(),
             )
+            suggested_tags, entities, tasks = _resolve_capture_extras(context, enrichment)
             prompt = _build_photo_capture_prompt(
                 vault_relative_path=vault_relative_path,
                 attachment=photo_attachment,
                 core_info=core_info,
-                suggested_tags=enrichment.tags,
+                suggested_tags=suggested_tags,
+                entities=entities,
+                tasks=tasks,
+                moc_path=settings.tasks_moc_path,
             )
             response = await _invoke_agent(agent, update.effective_chat.id, prompt)
             await _send_response(update, response)

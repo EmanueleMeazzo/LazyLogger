@@ -28,11 +28,21 @@ class Settings(BaseSettings):
     # Persistent conversation memory (kept off the synced vault on purpose).
     checkpointer_db_path: str = "/data/checkpoints.sqlite"
 
-    # Capture enrichment (auto-tagging now; people/projects/tasks in later phases)
-    auto_tagging_enabled: bool = True
+    # Capture enrichment master switch: one Azure call yields tags AND the
+    # people/projects/tasks consumed by entity-linking + task-extraction below.
+    enrichment_enabled: bool = True
     taxonomy_scan_limit: int = 60
     taxonomy_cache_ttl_seconds: int = 1800
     enrichment_min_chars: int = 12
+
+    # Entity linking (people/projects → hub notes; topics fold into tags)
+    entity_linking_enabled: bool = True
+    entities_folder: str = "Entities"
+    entity_cache_ttl_seconds: int = 1800
+
+    # Task extraction (daily `## ✅ Tasks` section + central MOC)
+    task_extraction_enabled: bool = True
+    tasks_moc_path: str = "Tasks/Tasks.md"
 
     # URL extraction
     url_extraction_enabled: bool = True
@@ -86,7 +96,13 @@ class Settings(BaseSettings):
             raise ValueError("URL_EXTRACTOR_BACKEND must be one of: crawl4ai")
         return normalized
 
-    @field_validator("link_notes_folder", "attachments_folder", mode="after")
+    @field_validator(
+        "link_notes_folder",
+        "attachments_folder",
+        "entities_folder",
+        "tasks_moc_path",
+        mode="after",
+    )
     @classmethod
     def validate_vault_relative_folder(cls, v: str) -> str:
         normalized = v.strip().replace("\\", "/").strip("/")
@@ -103,6 +119,7 @@ class Settings(BaseSettings):
         "url_fetch_max_chars",
         "taxonomy_scan_limit",
         "taxonomy_cache_ttl_seconds",
+        "entity_cache_ttl_seconds",
         mode="after",
     )
     @classmethod

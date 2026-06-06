@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from urllib.parse import ParseResult, urlparse
 
+from .utils import slugify
+
 if TYPE_CHECKING:
     from .config import Settings
 
@@ -223,8 +225,4 @@ class LinkExtractor:
         return f"{self.settings.link_notes_folder}/{now.year}/{now.month:02d}/{file_name}"
 
     def _slugify(self, text: str) -> str:
-        lowered = text.lower()
-        normalized = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
-        if not normalized:
-            return "link"
-        return normalized[:60]
+        return slugify(text, fallback="link")
