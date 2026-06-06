@@ -24,6 +24,7 @@ from telegram.ext import (
     filters,
 )
 
+from .enrichment import EnrichmentResult, enrich_capture
 from .utils import split_message, today_daily_note_path
 
 if TYPE_CHECKING:
@@ -39,6 +40,16 @@ TRANSCRIBED_AUDIO_PREFIX = "[Transcribed audio] "
 SUPPORTED_AUDIO_MIME_PREFIX = "audio/"
 ATTACHMENT_STEM_MAX_LENGTH = 50
 _SAFE_ATTACHMENT_EXT_RE = re.compile(r"^\.[a-z0-9]{1,10}$")
+
+# Daily-note section headings — kept identical to the template in system_prompt.md
+# so the agent appends to existing sections instead of creating duplicates.
+SECTION_NOTES = "## ✍️ Notes"
+SECTION_LINKS = "## 🔗 Links"
+SECTION_ATTACHMENTS = "## 📎 Attachments"
+SECTION_TASKS = "## ✅ Tasks"
+
+# Explicit "this is a question/command, not a memory" overrides for routing.
+QUERY_OVERRIDE_PREFIXES = ("ask:", "q:", "search:", "find:")
 
 REQUEST_PREFIXES = {
     "add",
@@ -392,7 +403,8 @@ async def _analyze_photo_with_azure(
                 ],
             },
         ],
-        max_tokens=220,
+        # These Azure deployments (gpt-5 family) reject `max_tokens`.
+        max_completion_tokens=220,
     )
     content = (response.choices[0].message.content or "").strip()
     if not content:
@@ -486,12 +498,15 @@ async def _process_user_text(
             return
 
     if not _is_direct_request(text):
-        prompt = _build_memory_capture_prompt(text)
+        enrichment = await _maybe_enrich(context, text)
+        prompt = _build_memory_capture_prompt(text, enrichment.tags)
         response = await _invoke_agent(agent, update.effective_chat.id, prompt)
         await _send_response(update, response)
         return
 
-    response = await _invoke_agent(agent, update.effective_chat.id, text)
+    response = await _invoke_agent(
+        agent, update.effective_chat.id, _strip_query_prefix(text)
+    )
     await _send_response(update, response)
 
 
@@ -503,22 +518,20 @@ def _build_link_capture_prompt(result: LinkExtractionResult) -> str:
         "Process this captured web link and save it into Obsidian.\n\n"
         f"- Original URL: {result.url}\n"
         f"- Canonical URL: {result.canonical_url}\n"
+        f"- Domain: {result.domain}\n"
         f"- Title candidate: {title}\n"
         f"- Captured at (UTC): {captured_at}\n"
         f"- Link note target path: {result.note_path}\n"
         f"- Daily note path for backlink: {daily_path}\n\n"
         "Required actions:\n"
-        "1) Create or update the link note at the target path.\n"
-        "2) In that link note, store:\n"
-        "   - Title\n"
-        "   - Source URL\n"
-        "   - Captured timestamp\n"
-        "   - A concise synopsis (3-5 bullet points) based only on the extracted content below\n"
-        "   - Tags: #link #synopsis\n"
-        "3) In today's daily note, append under a `## Links` section a bullet with:\n"
-        "   - URL\n"
-        "   - wikilink to the dedicated link note\n"
-        "   - one-line synopsis\n"
+        "1) Create or update the link note at the target path. Use `write_note` with a `frontmatter` "
+        "object containing: type: link, created (the captured time above), source: telegram, url, "
+        "canonical_url, domain, title, and a `tags` list that includes `link` plus any relevant "
+        "topical tags drawn from the content.\n"
+        "2) In the note body, write a concise synopsis (3-5 bullet points) based only on the "
+        "extracted content below.\n"
+        f"3) In today's daily note, append under the `{SECTION_LINKS}` section a bullet with the URL, "
+        "a wikilink to the dedicated link note, and a one-line synopsis.\n"
         "4) Confirm what was written and where.\n\n"
         "Extracted content begins below:\n"
         "---\n"
@@ -536,10 +549,23 @@ def _build_link_extraction_error_prompt(result: LinkExtractionResult) -> str:
     )
 
 
-def _is_direct_request(text: str) -> bool:
+def _strip_transcribed_prefix(text: str) -> str:
+    """Strip the `[Transcribed audio]` marker so routing/enrichment see real content."""
     stripped = text.strip()
+    if stripped.startswith(TRANSCRIBED_AUDIO_PREFIX):
+        return stripped[len(TRANSCRIBED_AUDIO_PREFIX):].strip()
+    return stripped
+
+
+def _is_direct_request(text: str) -> bool:
+    # Route a transcribed question on its real content, not the prefix.
+    stripped = _strip_transcribed_prefix(text)
     if not stripped:
         return False
+
+    lowered = stripped.lower()
+    if lowered.startswith("?") or any(lowered.startswith(p) for p in QUERY_OVERRIDE_PREFIXES):
+        return True
 
     if stripped.endswith("?"):
         return True
@@ -551,16 +577,62 @@ def _is_direct_request(text: str) -> bool:
     return False
 
 
-def _build_memory_capture_prompt(text: str) -> str:
+def _strip_query_prefix(text: str) -> str:
+    """Remove an explicit query-override prefix before sending to the agent."""
+    stripped = text.strip()
+    lowered = stripped.lower()
+    for prefix in QUERY_OVERRIDE_PREFIXES:
+        if lowered.startswith(prefix):
+            return stripped[len(prefix):].strip()
+    return stripped
+
+
+def _format_suggested_tags(tags: list[str] | None) -> str:
+    if not tags:
+        return ""
+    return (
+        "\nWhen these suggested tags genuinely fit, merge them into the note's frontmatter "
+        "`tags` list (use update_frontmatter with merge: true): "
+        f"{', '.join(tags)}.\n"
+    )
+
+
+async def _maybe_enrich(
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> EnrichmentResult:
+    """Best-effort capture enrichment (tags); never blocks the capture flow."""
+    settings: Settings = context.application.bot_data["settings"]
+    if not settings.auto_tagging_enabled:
+        return EnrichmentResult()
+
+    cleaned = _strip_transcribed_prefix(text)
+    if len(cleaned) < settings.enrichment_min_chars:
+        return EnrichmentResult()
+
+    client: AsyncAzureOpenAI = context.application.bot_data["openai_client"]
+    taxonomy_cache = context.application.bot_data.get("taxonomy_cache")
+    taxonomy = await asyncio.to_thread(taxonomy_cache.get) if taxonomy_cache else []
+    return await enrich_capture(
+        client,
+        settings.azure_openai_deployment,
+        cleaned,
+        taxonomy,
+    )
+
+
+def _build_memory_capture_prompt(text: str, suggested_tags: list[str] | None = None) -> str:
     daily_path = today_daily_note_path()
     return (
         "Treat this user message as a memory entry to store, not as a question to answer.\n\n"
         f"Daily note target path: {daily_path}\n"
         "Required actions:\n"
-        "1) Read or create today's daily note at the target path.\n"
-        "2) Append this message under `## Notes` as a concise bullet memory with a timestamp.\n"
+        "1) Read or create today's daily note at the target path. When creating it, use the daily "
+        "note template (including the YAML frontmatter: type, created, source, date, day, tags).\n"
+        f"2) Append this message under `{SECTION_NOTES}` as a concise bullet memory with a timestamp.\n"
         "3) Do not perform extra tasks unless explicitly requested.\n"
-        "4) Confirm the memory was stored.\n\n"
+        "4) Confirm the memory was stored.\n"
+        f"{_format_suggested_tags(suggested_tags)}\n"
         "Memory content:\n"
         f"{text.strip()}"
     )
@@ -584,8 +656,9 @@ def _build_attachment_capture_prompt(
         f"{caption_line}"
         f"- Daily note target path: {daily_path}\n\n"
         "Required actions:\n"
-        "1) Read or create today's daily note at the target path.\n"
-        "2) Ensure there is a `## Attachments` section (create it if missing).\n"
+        "1) Read or create today's daily note at the target path (when creating it, include the "
+        "template YAML frontmatter: type, created, source, date, day, tags).\n"
+        f"2) Ensure there is a `{SECTION_ATTACHMENTS}` section (create it only if absent).\n"
         "3) Append a single bullet in that section using this exact markdown link format:\n"
         f"   - [{attachment.file_name}]({vault_relative_path})\n"
         "4) Keep any caption text short and optional in the same bullet.\n"
@@ -597,6 +670,7 @@ def _build_photo_capture_prompt(
     vault_relative_path: str,
     attachment: AttachmentPayload,
     core_info: str,
+    suggested_tags: list[str] | None = None,
 ) -> str:
     daily_path = today_daily_note_path()
     caption = (attachment.caption or "").strip()
@@ -614,12 +688,14 @@ def _build_photo_capture_prompt(
         "Core info extracted from the image:\n"
         f"{core_info}\n\n"
         "Required actions:\n"
-        "1) Read or create today's daily note at the target path.\n"
-        "2) Ensure there is a `## Attachments` section and append this exact link bullet:\n"
+        "1) Read or create today's daily note at the target path (when creating it, include the "
+        "template YAML frontmatter: type, created, source, date, day, tags).\n"
+        f"2) Ensure there is a `{SECTION_ATTACHMENTS}` section and append this exact link bullet:\n"
         f"   - [{attachment.file_name}]({vault_relative_path})\n"
-        "3) Ensure there is a `## Notes` section and append a concise bullet that summarizes the extracted core info from the image.\n"
+        f"3) Ensure there is a `{SECTION_NOTES}` section and append a concise bullet that summarizes the extracted core info from the image.\n"
         "4) Keep the summary factual and short; do not invent details beyond the extracted info.\n"
         "5) Confirm what was written and where.\n"
+        f"{_format_suggested_tags(suggested_tags)}"
     )
 
 
@@ -655,7 +731,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Or just send a natural language message:\n"
         '- "Add to today\'s notes: meeting with Silvia"\n'
         '- "What did I write about SOFIA last week?"\n'
-        '- "Create a note called Projects/NewIdea"'
+        '- "Create a note called Projects/NewIdea"\n\n'
+        "Plain statements are saved as memories in today's note. To force a question/lookup "
+        'instead, end with "?" or start with "ask:" (e.g. "ask: my notes on SOFIA").'
     )
 
 
@@ -722,10 +800,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 mime_type=photo_attachment.mime_type,
                 caption=photo_attachment.caption,
             )
+            enrichment = await _maybe_enrich(
+                context,
+                f"{photo_attachment.caption or ''}\n{core_info}".strip(),
+            )
             prompt = _build_photo_capture_prompt(
                 vault_relative_path=vault_relative_path,
                 attachment=photo_attachment,
                 core_info=core_info,
+                suggested_tags=enrichment.tags,
             )
             response = await _invoke_agent(agent, update.effective_chat.id, prompt)
             await _send_response(update, response)

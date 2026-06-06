@@ -273,4 +273,68 @@ def test_build_photo_capture_prompt_includes_core_info():
 
     assert "Core info extracted from the image" in prompt
     assert "launch blockers" in prompt
-    assert "## Notes" in prompt
+    assert telegram_bot.SECTION_NOTES in prompt
+
+
+def test_build_photo_capture_prompt_includes_suggested_tags():
+    payload = telegram_bot.AttachmentPayload(
+        file_name="photo_u.jpg",
+        file_unique_id="u",
+        mime_type="image/jpeg",
+        file_size=10,
+        file_bytes=b"img",
+        captured_at=datetime(2026, 3, 14, 13, 0, 0, tzinfo=UTC),
+        caption=None,
+    )
+
+    prompt = telegram_bot._build_photo_capture_prompt(
+        vault_relative_path="Attachments/2026/03/photo_u.jpg",
+        attachment=payload,
+        core_info="- Whiteboard",
+        suggested_tags=["planning", "roadmap"],
+    )
+
+    assert "planning, roadmap" in prompt
+
+
+def test_build_memory_capture_prompt_includes_suggested_tags():
+    prompt = telegram_bot._build_memory_capture_prompt("met Sara", ["people", "work"])
+    assert telegram_bot.SECTION_NOTES in prompt
+    assert "people, work" in prompt
+    # Without tags, no tag-merge instruction is added.
+    assert "update_frontmatter" not in telegram_bot._build_memory_capture_prompt("hi", [])
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("what did I do today?", True),
+        ("Search the vault for SOFIA", True),
+        ("met Sara about the launch", False),
+        ("[Transcribed audio] what is my plan?", True),
+        ("[Transcribed audio] remember to call the bank", False),
+        ("ask: my notes on SOFIA", True),
+        ("? quick lookup", True),
+        ("", False),
+    ],
+)
+def test_is_direct_request_routing(text, expected):
+    assert telegram_bot._is_direct_request(text) is expected
+
+
+def test_strip_query_prefix_removes_override():
+    assert telegram_bot._strip_query_prefix("ask: my notes on SOFIA") == "my notes on SOFIA"
+    assert telegram_bot._strip_query_prefix("plain text") == "plain text"
+
+
+def test_section_constants_match_system_prompt():
+    """The SECTION_* constants must stay identical to the template's headings."""
+    prompt_path = Path(__file__).resolve().parent.parent / "system_prompt.md"
+    content = prompt_path.read_text(encoding="utf-8")
+    for section in (
+        telegram_bot.SECTION_NOTES,
+        telegram_bot.SECTION_LINKS,
+        telegram_bot.SECTION_ATTACHMENTS,
+        telegram_bot.SECTION_TASKS,
+    ):
+        assert section in content, f"{section!r} missing from system_prompt.md"

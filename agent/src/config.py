@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     system_prompt_path: str = "/app/system_prompt.md"
     llm_max_tokens: int = 4096
     log_level: str = "INFO"
+    # Persistent conversation memory (kept off the synced vault on purpose).
+    checkpointer_db_path: str = "/data/checkpoints.sqlite"
+
+    # Capture enrichment (auto-tagging now; people/projects/tasks in later phases)
+    auto_tagging_enabled: bool = True
+    taxonomy_scan_limit: int = 60
+    taxonomy_cache_ttl_seconds: int = 1800
+    enrichment_min_chars: int = 12
 
     # URL extraction
     url_extraction_enabled: bool = True
@@ -93,6 +101,8 @@ class Settings(BaseSettings):
         "url_extraction_max_urls_per_message",
         "url_fetch_timeout_seconds",
         "url_fetch_max_chars",
+        "taxonomy_scan_limit",
+        "taxonomy_cache_ttl_seconds",
         mode="after",
     )
     @classmethod

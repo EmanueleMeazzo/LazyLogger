@@ -9,13 +9,16 @@ import asyncio
 import logging
 import signal
 import sys
+from pathlib import Path
 
 import structlog
 from aiohttp import web
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from openai import AsyncAzureOpenAI
 
 from .agent import build_agent, load_system_prompt
 from .config import Settings
+from .enrichment import TaxonomyCache
 from .link_extractor import LinkExtractor
 from .mcp_client import create_mcp_client
 from .telegram_bot import build_application
@@ -69,8 +72,18 @@ async def async_main() -> None:
     tools = await mcp_client.get_tools()
     logger.info("MCP tools loaded", tool_count=len(tools), tools=[t.name for t in tools])
 
+    # Persistent conversation memory: a SQLite-backed checkpointer that survives
+    # restarts. The connection is an async context manager owned here for the
+    # whole process lifetime (closed in the finally block, alongside the MCP client).
+    db_path = settings.checkpointer_db_path
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    checkpointer_cm = AsyncSqliteSaver.from_conn_string(db_path)
+    checkpointer = await checkpointer_cm.__aenter__()
+    await checkpointer.setup()
+    logger.info("Conversation checkpointer ready", path=db_path)
+
     # Create the LangChain agent
-    agent = build_agent(settings, tools, system_prompt)
+    agent = build_agent(settings, tools, system_prompt, checkpointer)
 
     # Build Telegram application
     telegram_app = build_application(settings)
@@ -82,6 +95,11 @@ async def async_main() -> None:
         api_key=settings.azure_openai_api_key,
         azure_endpoint=settings.azure_openai_endpoint,
         api_version=settings.azure_openai_api_version,
+    )
+    telegram_app.bot_data["taxonomy_cache"] = TaxonomyCache(
+        settings.mcp_vault_path,
+        settings.taxonomy_scan_limit,
+        settings.taxonomy_cache_ttl_seconds,
     )
 
     # Start health server
@@ -115,9 +133,12 @@ async def async_main() -> None:
         await health_runner.cleanup()
         # Close OpenAI client
         await telegram_app.bot_data["openai_client"].close()
-        # Close MCP client (stops subprocess)
-        if hasattr(mcp_client, "__aexit__"):
-            await mcp_client.__aexit__(None, None, None)
+        # NOTE: MultiServerMCPClient (langchain-mcp-adapters >=0.1.0) is NOT an
+        # async context manager — calling __aexit__ raises NotImplementedError.
+        # With per-call stdio sessions there's nothing to close here; the MCP
+        # subprocess is reaped when this process exits.
+        # Close the persistent checkpointer connection
+        await checkpointer_cm.__aexit__(None, None, None)
         logger.info("Shutdown complete.")
 
 

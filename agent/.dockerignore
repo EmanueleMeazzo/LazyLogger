@@ -1,0 +1,10 @@
+# Local virtualenv — the image builds its own via `uv sync --frozen`
+.venv/
+# Python caches / test artifacts
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+# Roundtrip/scratch scripts
+_roundtrip_check.py

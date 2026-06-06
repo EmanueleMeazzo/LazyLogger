@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING
 
 import structlog
 from langchain_openai import AzureChatOpenAI
-from langgraph.checkpoint.memory import InMemorySaver
 from langchain.agents import create_agent
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
+    from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph.state import CompiledStateGraph
 
     from .config import Settings
@@ -39,10 +39,14 @@ def build_agent(
     settings: Settings,
     tools: list[BaseTool],
     system_prompt: str,
+    checkpointer: BaseCheckpointSaver,
 ) -> CompiledStateGraph:
-    """Create the LangGraph ReAct agent with MCP tools and conversation memory."""
+    """Create the LangGraph ReAct agent with MCP tools and conversation memory.
+
+    The checkpointer is created and owned by the caller (see main.async_main) so
+    its connection lives for the whole process lifetime.
+    """
     llm = create_llm(settings)
-    memory = InMemorySaver()
 
     # Let the LLM see tool errors and recover, instead of crashing
     for tool in tools:
@@ -52,7 +56,7 @@ def build_agent(
         llm,
         tools=tools,
         system_prompt=system_prompt,
-        checkpointer=memory,
+        checkpointer=checkpointer,
     )
 
     logger.info(

@@ -8,6 +8,7 @@ dependencies = [
     "openai>=1.0",
     "langchain-mcp-adapters",
     "langgraph",
+    "langgraph-checkpoint-sqlite",
     "python-telegram-bot>=22.0",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",

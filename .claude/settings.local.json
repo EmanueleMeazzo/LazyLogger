@@ -19,7 +19,13 @@
       "mcp__ide__getDiagnostics",
       "Bash(python:*)",
       "Bash(uv run:*)",
-      "WebFetch(domain:obsidian.md)"
+      "WebFetch(domain:obsidian.md)",
+      "WebFetch(domain:blog.saner.ai)",
+      "WebFetch(domain:www.stefanimhoff.de)",
+      "Bash(uv --version)",
+      "Bash(uv lock *)",
+      "Bash(grep -A2 -nE '^name = \"langgraph-checkpoint-sqlite\"$' uv.lock)",
+      "Bash(git *)"
     ]
   }
 }

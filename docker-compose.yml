@@ -25,11 +25,15 @@ services:
     restart: unless-stopped
     volumes:
       - vault-data:/vault
+      # Bot state (conversation checkpointer DB) — kept OFF the synced vault so
+      # SQLite/WAL files never ship to Obsidian cloud or get indexed by search.
+      - agent-data:/data
     env_file:
       - .env
     environment:
       - MCP_VAULT_PATH=/vault
       - SYSTEM_PROMPT_PATH=/app/system_prompt.md
+      - CHECKPOINTER_DB_PATH=/data/checkpoints.sqlite
     depends_on:
       obsidian-sync:
         condition: service_healthy
@@ -42,3 +46,4 @@ services:
 volumes:
   vault-data:
   obsidian-config:
+  agent-data:
