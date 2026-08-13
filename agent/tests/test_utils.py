@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from src.utils import (
     format_local_time,
+    local_date_stem,
     parse_frontmatter,
     sanitize_note_name,
     slugify,
@@ -206,3 +207,16 @@ class TestFormatLocalTime:
         ):
             assert format_local_time(dt) == "11:30"
         mock_zi.assert_called_once_with("Europe/Rome")
+
+
+class TestLocalDateStem:
+    def test_converts_to_user_timezone(self):
+        """22:10 UTC is already the next day in Rome — the stem must follow."""
+        with patch.dict("os.environ", {"USER_TIMEZONE": "Europe/Rome"}):
+            dt = datetime(2026, 8, 14, 22, 10, tzinfo=timezone.utc)
+            assert local_date_stem(dt) == "20260815"
+
+    def test_utc_default(self):
+        with patch.dict("os.environ", {"USER_TIMEZONE": "UTC"}):
+            dt = datetime(2026, 8, 14, 22, 10, tzinfo=timezone.utc)
+            assert local_date_stem(dt) == "20260814"

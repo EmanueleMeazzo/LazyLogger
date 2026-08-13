@@ -34,10 +34,10 @@ Self-hosted AI agent that integrates an Obsidian vault with Telegram. Send natur
 
 - Docker + Docker Compose (or Podman)
 - An [Obsidian Sync](https://obsidian.md/sync) subscription
-- An Azure OpenAI deployment (gpt-5 recommended)
+- An Azure OpenAI deployment (gpt-5.6-terra recommended)
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 
-Tested with GPT-5.
+Tested with gpt-5.6-terra, via the Azure OpenAI **v1** API.
 
 ## Quick Start
 
@@ -173,13 +173,15 @@ All configuration is via environment variables (`.env` file). See `.env.example`
 |----------|----------|---------|-------------|
 | `AZURE_OPENAI_ENDPOINT` | Yes | — | Azure OpenAI endpoint URL |
 | `AZURE_OPENAI_API_KEY` | Yes | — | Azure OpenAI API key |
-| `AZURE_OPENAI_DEPLOYMENT` | No | `gpt-5` | Model deployment name |
+| `AZURE_OPENAI_DEPLOYMENT` | No | `gpt-5.6-terra` | Model deployment name |
 | `AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT` | No | `whisper-1` | Whisper transcription deployment name used for audio messages |
-| `AZURE_OPENAI_API_VERSION` | No | `2025-03-01-preview` | API version override |
+| `AZURE_OPENAI_API_VERSION` | No | `2025-04-01-preview` | Applies to audio transcription only; chat and vision use the v1 API |
 | `TELEGRAM_BOT_TOKEN` | Yes | — | Telegram bot token from @BotFather |
 | `TELEGRAM_AUTHORIZED_USERS` | Yes | — | Comma-separated Telegram usernames (without @) |
 | `LOG_LEVEL` | No | `INFO` | Logging level (`DEBUG` for verbose agent tracing) |
 | `LLM_MAX_TOKENS` | No | `4096` | LLM max output tokens |
+| `CONVERSATION_IDLE_MINUTES` | No | `30` | Idle gap after which a chat starts a new conversation session |
+| `CONVERSATION_MAX_TOKENS` | No | `60000` | Hard ceiling on conversation context; older messages are trimmed |
 | `URL_EXTRACTION_ENABLED` | No | `true` | Enables automatic URL processing in normal chat messages |
 | `URL_EXTRACTOR_BACKEND` | No | `crawl4ai` | URL extraction backend used by the agent |
 | `URL_EXTRACTION_MAX_URLS_PER_MESSAGE` | No | `3` | Maximum number of URLs processed per incoming message |

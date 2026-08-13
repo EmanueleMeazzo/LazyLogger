@@ -8,7 +8,7 @@ import mimetypes
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
@@ -27,6 +27,7 @@ from telegram.ext import (
 from .enrichment import EnrichmentResult, ResolvedEntity, enrich_capture, resolve_entities
 from .utils import (
     format_local_time,
+    local_date_stem,
     split_message,
     today_daily_note_path,
     today_daily_note_stem,
@@ -34,7 +35,7 @@ from .utils import (
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
-    from openai import AsyncAzureOpenAI
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
 
     from .config import Settings
     from .link_extractor import LinkExtractionResult, LinkExtractor
@@ -130,10 +131,39 @@ def _require_auth(handler: Callable) -> Callable:
     return wrapper
 
 
-async def _invoke_agent(agent: CompiledStateGraph, chat_id: int, text: str) -> str:
+def _resolve_thread_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """Return the conversation thread id for this chat's current session.
+
+    A session is a single back-and-forth: it rolls over when the chat has been
+    idle for ``CONVERSATION_IDLE_MINUTES`` or when the local date changes. This
+    is what keeps the checkpointed history — and therefore the context sent to
+    the LLM — bounded; without it a chat accumulates one ever-growing thread.
+
+    Session state lives in ``chat_data`` (in-memory, no persistence configured),
+    so a restart simply starts a fresh session.
+    """
+    settings: Settings = context.application.bot_data["settings"]
+    chat_id = update.effective_chat.id
+    now = (update.message.date if update.message else None) or datetime.now(timezone.utc)
+    date_stem = local_date_stem(now)
+
+    session = context.chat_data.get("session")
+    if (
+        session is None
+        or session["date"] != date_stem
+        or now - session["last_seen"]
+        > timedelta(minutes=settings.conversation_idle_minutes)
+    ):
+        session = {"id": now.strftime("%Y%m%d-%H%M%S"), "date": date_stem}
+    session["last_seen"] = now
+    context.chat_data["session"] = session
+    return f"{chat_id}:{session['id']}"
+
+
+async def _invoke_agent(agent: CompiledStateGraph, thread_id: str, text: str) -> str:
     """Invoke the LangGraph agent and return the response text."""
-    config = {"configurable": {"thread_id": str(chat_id)}}
-    logger.debug("Agent invocation started", chat_id=chat_id, input=text)
+    config = {"configurable": {"thread_id": thread_id}}
+    logger.debug("Agent invocation started", thread_id=thread_id, input=text)
 
     last_content: str = ""
 
@@ -145,7 +175,9 @@ async def _invoke_agent(agent: CompiledStateGraph, chat_id: int, text: str) -> s
             stream_mode="updates",
         ):
             for node_name, node_output in event.items():
-                messages = node_output.get("messages", [])
+                # Middleware nodes emit None when they make no state update
+                # (e.g. TrimConversation when the conversation already fits).
+                messages = (node_output or {}).get("messages", [])
                 for msg in messages:
                     msg_type = msg.type if hasattr(msg, "type") else type(msg).__name__
 
@@ -179,7 +211,7 @@ async def _invoke_agent(agent: CompiledStateGraph, chat_id: int, text: str) -> s
                         )
 
     await asyncio.wait_for(_stream(), timeout=120.0)
-    logger.debug("Agent invocation finished", chat_id=chat_id)
+    logger.debug("Agent invocation finished", thread_id=thread_id)
     return last_content or "I processed your request but have nothing to report."
 
 
@@ -193,7 +225,9 @@ async def _invoke_and_reply(
     await update.message.chat.send_action(ChatAction.TYPING)
 
     try:
-        response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+        response = await _invoke_agent(
+            agent, _resolve_thread_id(update, context), prompt
+        )
         await _send_response(update, response)
     except Exception:
         logger.exception("Error invoking agent")
@@ -372,7 +406,7 @@ async def _transcribe_audio_with_azure(
 
 
 async def _analyze_photo_with_azure(
-    client: AsyncAzureOpenAI,
+    client: AsyncOpenAI,
     deployment: str,
     photo_bytes: bytes,
     mime_type: str,
@@ -434,7 +468,8 @@ async def _extract_message_text(
 
     audio_bytes, filename, mime_type = audio_payload
     settings: Settings = context.application.bot_data["settings"]
-    client: AsyncAzureOpenAI = context.application.bot_data["openai_client"]
+    # Whisper is the one route that can't use the v1 client — see main.async_main.
+    client: AsyncAzureOpenAI = context.application.bot_data["transcription_client"]
     try:
         transcript = await _transcribe_audio_with_azure(
             client=client,
@@ -495,7 +530,9 @@ async def _process_user_text(
                     if extraction.success
                     else _build_link_extraction_error_prompt(extraction)
                 )
-                response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+                response = await _invoke_agent(
+                    agent, _resolve_thread_id(update, context), prompt
+                )
                 responses.append(response)
 
             if responses:
@@ -513,12 +550,14 @@ async def _process_user_text(
             settings.tasks_moc_path,
             update.message.date if update.message else None,
         )
-        response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+        response = await _invoke_agent(
+            agent, _resolve_thread_id(update, context), prompt
+        )
         await _send_response(update, response)
         return
 
     response = await _invoke_agent(
-        agent, update.effective_chat.id, _strip_query_prefix(text)
+        agent, _resolve_thread_id(update, context), _strip_query_prefix(text)
     )
     await _send_response(update, response)
 
@@ -671,7 +710,7 @@ async def _maybe_enrich(
     if len(cleaned) < settings.enrichment_min_chars:
         return EnrichmentResult()
 
-    client: AsyncAzureOpenAI = context.application.bot_data["openai_client"]
+    client: AsyncOpenAI = context.application.bot_data["openai_client"]
     taxonomy_cache = context.application.bot_data.get("taxonomy_cache")
     entity_catalog = context.application.bot_data.get("entity_catalog")
     taxonomy = await asyncio.to_thread(taxonomy_cache.get) if taxonomy_cache else []
@@ -906,7 +945,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.chat.send_action(ChatAction.TYPING)
         settings: Settings = context.application.bot_data["settings"]
         agent: CompiledStateGraph = context.application.bot_data["agent"]
-        client: AsyncAzureOpenAI = context.application.bot_data["openai_client"]
+        client: AsyncOpenAI = context.application.bot_data["openai_client"]
         try:
             vault_relative_path = _persist_attachment_to_vault(
                 settings, photo_attachment
@@ -932,7 +971,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 tasks=tasks,
                 moc_path=settings.tasks_moc_path,
             )
-            response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+            response = await _invoke_agent(
+                agent, _resolve_thread_id(update, context), prompt
+            )
             await _send_response(update, response)
         except Exception:
             logger.exception(
@@ -956,7 +997,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             vault_relative_path = _persist_attachment_to_vault(settings, attachment)
             prompt = _build_attachment_capture_prompt(vault_relative_path, attachment)
-            response = await _invoke_agent(agent, update.effective_chat.id, prompt)
+            response = await _invoke_agent(
+                agent, _resolve_thread_id(update, context), prompt
+            )
             await _send_response(update, response)
         except Exception:
             logger.exception(

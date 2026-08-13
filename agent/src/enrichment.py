@@ -20,7 +20,7 @@ import structlog
 from .utils import sanitize_note_name, split_frontmatter
 
 if TYPE_CHECKING:
-    from openai import AsyncAzureOpenAI
+    from openai import AsyncOpenAI
 
 logger = structlog.get_logger()
 
@@ -313,7 +313,7 @@ def _build_user_content(
 
 
 async def enrich_capture(
-    client: AsyncAzureOpenAI,
+    client: AsyncOpenAI,
     deployment: str,
     text: str,
     taxonomy: list[str] | None = None,

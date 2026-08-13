@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -46,9 +46,14 @@ async def test_extract_message_text_returns_prefixed_transcript(monkeypatch):
         azure_openai_deployment="test-chat-deployment",
         azure_openai_transcription_deployment="test-whisper-deployment",
     )
+    transcription_client = object()
     fake_context = SimpleNamespace(
         application=SimpleNamespace(
-            bot_data={"settings": fake_settings, "openai_client": object()}
+            bot_data={
+                "settings": fake_settings,
+                "openai_client": object(),
+                "transcription_client": transcription_client,
+            }
         )
     )
 
@@ -61,6 +66,9 @@ async def test_extract_message_text_returns_prefixed_transcript(monkeypatch):
     text = await telegram_bot._extract_message_text(fake_update, fake_context)
 
     assert text == f"{telegram_bot.TRANSCRIBED_AUDIO_PREFIX}hello from audio"
+    # Must be the legacy Azure client, not openai_client: the v1
+    # /audio/transcriptions route 404s on Whisper deployments.
+    assert transcribe_mock.await_args.kwargs["client"] is transcription_client
 
 
 @pytest.mark.asyncio
@@ -71,7 +79,11 @@ async def test_extract_message_text_transcription_failure_replies_and_returns_no
     )
     fake_context = SimpleNamespace(
         application=SimpleNamespace(
-            bot_data={"settings": object(), "openai_client": object()}
+            bot_data={
+                "settings": object(),
+                "openai_client": object(),
+                "transcription_client": object(),
+            }
         )
     )
 
@@ -499,3 +511,107 @@ def test_section_constants_match_system_prompt():
         "## Mentions",
     ):
         assert section in content, f"{section!r} missing from system_prompt.md"
+
+
+def _thread_id_context(idle_minutes: int = 30):
+    """Context stub with the two pieces _resolve_thread_id touches."""
+    settings = SimpleNamespace(conversation_idle_minutes=idle_minutes)
+    return SimpleNamespace(
+        application=SimpleNamespace(bot_data={"settings": settings}),
+        chat_data={},
+    )
+
+
+def _thread_id_update(sent_at: datetime, chat_id: int = 42):
+    return SimpleNamespace(
+        effective_chat=SimpleNamespace(id=chat_id),
+        message=SimpleNamespace(date=sent_at),
+    )
+
+
+def test_resolve_thread_id_keeps_session_within_idle_window():
+    """Messages in quick succession share one thread, so the agent has context."""
+    context = _thread_id_context()
+    first = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
+
+    a = telegram_bot._resolve_thread_id(_thread_id_update(first), context)
+    b = telegram_bot._resolve_thread_id(
+        _thread_id_update(first + timedelta(minutes=29)), context
+    )
+
+    assert a == b
+    assert a.startswith("42:")
+
+
+def test_resolve_thread_id_rolls_after_idle_gap():
+    context = _thread_id_context()
+    first = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
+
+    a = telegram_bot._resolve_thread_id(_thread_id_update(first), context)
+    b = telegram_bot._resolve_thread_id(
+        _thread_id_update(first + timedelta(minutes=31)), context
+    )
+
+    assert a != b
+
+
+def test_resolve_thread_id_idle_window_slides_with_each_message():
+    """The gap is measured from the last message, not the session start."""
+    context = _thread_id_context()
+    start = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
+
+    a = telegram_bot._resolve_thread_id(_thread_id_update(start), context)
+    for step in range(1, 5):
+        current = telegram_bot._resolve_thread_id(
+            _thread_id_update(start + timedelta(minutes=20 * step)), context
+        )
+
+    assert current == a
+
+
+def test_resolve_thread_id_rolls_on_local_date_change(monkeypatch):
+    """A new day starts a new session even inside the idle window."""
+    monkeypatch.setenv("USER_TIMEZONE", "Europe/Rome")
+    context = _thread_id_context()
+    # 23:50 and 00:05 Rome time — 15 minutes apart, but different local dates.
+    before_midnight = datetime(2026, 8, 14, 21, 50, tzinfo=UTC)
+    after_midnight = datetime(2026, 8, 14, 22, 5, tzinfo=UTC)
+
+    a = telegram_bot._resolve_thread_id(_thread_id_update(before_midnight), context)
+    b = telegram_bot._resolve_thread_id(_thread_id_update(after_midnight), context)
+
+    assert a != b
+
+
+def test_resolve_thread_id_separates_chats():
+    """chat_data is per-chat in production; the id still carries the chat."""
+    now = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
+
+    a = telegram_bot._resolve_thread_id(
+        _thread_id_update(now, chat_id=1), _thread_id_context()
+    )
+    b = telegram_bot._resolve_thread_id(
+        _thread_id_update(now, chat_id=2), _thread_id_context()
+    )
+
+    assert a != b
+    assert a.startswith("1:") and b.startswith("2:")
+
+
+@pytest.mark.asyncio
+async def test_invoke_agent_tolerates_middleware_no_op_updates():
+    """A middleware node that makes no state change streams ``None``.
+
+    ``TrimConversation`` returns None whenever the conversation already fits,
+    so ``stream_mode="updates"`` yields ``{"TrimConversation": None}``. Calling
+    ``.get()`` on that raised AttributeError and broke every message.
+    """
+
+    class FakeAgent:
+        async def astream(self, _input, config, stream_mode):
+            yield {"TrimConversation": None}
+            yield {"model": {"messages": [SimpleNamespace(type="ai", content="done")]}}
+
+    result = await telegram_bot._invoke_agent(FakeAgent(), "7:20260814-100000", "hi")
+
+    assert result == "done"

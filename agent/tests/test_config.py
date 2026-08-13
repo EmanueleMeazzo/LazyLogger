@@ -53,9 +53,12 @@ class TestSettings:
         }
         with patch.dict(os.environ, env, clear=True):
             s = Settings(_env_file=None)
-            assert s.azure_openai_deployment == "gpt-5"
+            assert s.azure_openai_deployment == "gpt-5.6-terra"
             assert s.azure_openai_transcription_deployment == "whisper-1"
+            assert s.azure_openai_api_version == "2025-04-01-preview"
             assert s.llm_max_tokens == 4096
+            assert s.conversation_idle_minutes == 30
+            assert s.conversation_max_tokens == 60000
             assert s.health_port == 8080
             assert s.url_extraction_enabled is True
             assert s.url_extractor_backend == "crawl4ai"
@@ -98,6 +101,40 @@ class TestSettings:
         with patch.dict(os.environ, env, clear=True):
             with pytest.raises(ValueError, match="positive integer"):
                 Settings(_env_file=None)
+
+    @pytest.mark.parametrize(
+        "var", ["CONVERSATION_IDLE_MINUTES", "CONVERSATION_MAX_TOKENS"]
+    )
+    def test_conversation_settings_must_be_positive(self, var):
+        env = {
+            "AZURE_OPENAI_ENDPOINT": "https://test.openai.azure.com/",
+            "AZURE_OPENAI_API_KEY": "test-key",
+            "TELEGRAM_BOT_TOKEN": "test-token",
+            "TELEGRAM_AUTHORIZED_USERS": "alice",
+            var: "0",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with pytest.raises(ValueError, match="positive integer"):
+                Settings(_env_file=None)
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "https://test.openai.azure.com/",  # trailing slash (the real-world value)
+            "https://test.openai.azure.com",
+        ],
+    )
+    def test_azure_v1_base_url(self, endpoint):
+        """The v1 base URL is the endpoint + /openai/v1/, regardless of trailing slash."""
+        env = {
+            "AZURE_OPENAI_ENDPOINT": endpoint,
+            "AZURE_OPENAI_API_KEY": "test-key",
+            "TELEGRAM_BOT_TOKEN": "test-token",
+            "TELEGRAM_AUTHORIZED_USERS": "alice",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            s = Settings(_env_file=None)
+            assert s.azure_v1_base_url == "https://test.openai.azure.com/openai/v1/"
 
     def test_validate_url_backend_raises_for_invalid_value(self):
         with pytest.raises(ValueError, match="URL_EXTRACTOR_BACKEND"):

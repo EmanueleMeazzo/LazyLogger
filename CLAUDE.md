@@ -27,9 +27,12 @@ Daily-note path is `YYYY/MM/YYYYMMDD.md` from `utils.today_daily_note_path()`, w
 
 ## Agent Internals
 
-- `agent.build_agent` uses `langchain.agents.create_agent` (the modern entry point — **not** `create_react_agent`) with `langgraph.checkpoint.memory.InMemorySaver`. Conversation memory is keyed by `thread_id = str(chat_id)` so each Telegram chat has its own history.
+- `agent.build_agent` uses `langchain.agents.create_agent` (the modern entry point — **not** `create_react_agent`) with a `langgraph.checkpoint.sqlite.aio.AsyncSqliteSaver` created in `main.async_main` (`CHECKPOINTER_DB_PATH`, on the `agent-data` volume — history survives restarts).
+- Conversation memory is **session-scoped**, not chat-scoped: `telegram_bot._resolve_thread_id` returns `{chat_id}:{YYYYMMDD-HHMMSS}` and rolls the stamp when the chat has been idle for `CONVERSATION_IDLE_MINUTES` or the local date changes. Session state lives in `context.chat_data`. A bare `str(chat_id)` thread grows without bound and eventually 400s on context length — don't go back to it.
+- `agent.build_trim_middleware` is the backstop: a `@before_model` middleware that runs `trim_messages` at `CONVERSATION_MAX_TOKENS`. Keep `start_on="human"` — trimming mid `tool_calls`/`tool` pair orphans the call and the API rejects the request.
 - All MCP tools get `tool.handle_tool_error = True` so the LLM sees errors and can recover instead of crashing the run.
-- The LLM is `AzureChatOpenAI` from `langchain-openai`. Do **not** add a `temperature` parameter — modern Azure deployments (gpt-5, etc.) reject it. `api_version` defaults to `2025-03-01-preview`.
+- The LLM is `ChatOpenAI` from `langchain-openai` pointed at Azure's **v1 API** (`Settings.azure_v1_base_url` = endpoint + `/openai/v1/`); the deployment name goes in `model=`. Do **not** add a `temperature` parameter — modern Azure deployments (gpt-5, etc.) reject it.
+- There are **two** OpenAI clients in `bot_data`, and they are not interchangeable. `openai_client` is `AsyncOpenAI` on the v1 base URL (vision + enrichment). `transcription_client` is `AsyncAzureOpenAI` on the legacy deployment-scoped route with `AZURE_OPENAI_API_VERSION` — Azure's v1 `/audio/transcriptions` returns `DeploymentNotFound` for Whisper deployments, so pointing transcription at `openai_client` silently breaks voice notes.
 - `main.async_main` uses **manual** `python-telegram-bot` lifecycle (`initialize` → `start` → `updater.start_polling` → wait → reverse). Do not switch to `Application.run_polling()` — it owns the loop and will fight the health server / MCP shutdown.
 - System prompt lives in `agent/system_prompt.md` (mounted at `/app/system_prompt.md`) and is loaded once at startup. Edit the file rather than hardcoding strings in Python.
 

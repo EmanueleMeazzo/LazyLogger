@@ -15,7 +15,7 @@ from pathlib import Path
 import structlog
 from aiohttp import web
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from openai import AsyncAzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 from .agent import build_agent, load_system_prompt
 from .config import Settings
@@ -101,7 +101,17 @@ async def async_main() -> None:
     telegram_app.bot_data["tools"] = tools
     telegram_app.bot_data["mcp_client"] = mcp_client
     telegram_app.bot_data["link_extractor"] = LinkExtractor(settings)
-    telegram_app.bot_data["openai_client"] = AsyncAzureOpenAI(
+    # Azure v1 API: the stock OpenAI client against the resource's /openai/v1/
+    # base URL. Callers pass the deployment name as `model=` per request.
+    telegram_app.bot_data["openai_client"] = AsyncOpenAI(
+        api_key=settings.azure_openai_api_key,
+        base_url=settings.azure_v1_base_url,
+    )
+    # Whisper is the exception: the v1 /audio/transcriptions route 404s on
+    # Whisper deployments (it only resolves the newer transcribe models), so
+    # transcription keeps the legacy deployment-scoped client. Verified against
+    # the resource — swapping this to the v1 client silently breaks voice notes.
+    telegram_app.bot_data["transcription_client"] = AsyncAzureOpenAI(
         api_key=settings.azure_openai_api_key,
         azure_endpoint=settings.azure_openai_endpoint,
         api_version=settings.azure_openai_api_version,
@@ -146,8 +156,9 @@ async def async_main() -> None:
         await telegram_app.stop()
         await telegram_app.shutdown()
         await health_runner.cleanup()
-        # Close OpenAI client
+        # Close OpenAI clients
         await telegram_app.bot_data["openai_client"].close()
+        await telegram_app.bot_data["transcription_client"].close()
         # NOTE: MultiServerMCPClient (langchain-mcp-adapters >=0.1.0) is NOT an
         # async context manager — calling __aexit__ raises NotImplementedError.
         # With per-call stdio sessions there's nothing to close here; the MCP

@@ -10,9 +10,13 @@ class Settings(BaseSettings):
     # Azure OpenAI
     azure_openai_endpoint: str
     azure_openai_api_key: str
-    azure_openai_deployment: str = "gpt-5"
+    azure_openai_deployment: str = "gpt-5.6-terra"
     azure_openai_transcription_deployment: str = "whisper-1"
-    azure_openai_api_version: str = "2025-03-01-preview"
+    # Audio transcription only. Azure's v1 API serves chat/vision but its
+    # /audio/transcriptions route does not resolve Whisper deployments (they
+    # 404 as DeploymentNotFound), so that one call keeps the dated api-version
+    # and the deployment-scoped legacy URL. Everything else uses v1.
+    azure_openai_api_version: str = "2025-04-01-preview"
 
     # Telegram
     telegram_bot_token: str
@@ -27,6 +31,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     # Persistent conversation memory (kept off the synced vault on purpose).
     checkpointer_db_path: str = "/data/checkpoints.sqlite"
+    # Conversation scope: a session rolls after this idle gap or on a local date
+    # change; the token ceiling is a backstop enforced by the trim middleware.
+    conversation_idle_minutes: int = 30
+    conversation_max_tokens: int = 60000
 
     # Capture enrichment master switch: one Azure call yields tags AND the
     # people/projects/tasks consumed by entity-linking + task-extraction below.
@@ -126,6 +134,8 @@ class Settings(BaseSettings):
         "entity_cache_ttl_seconds",
         "smart_search_max_results",
         "smart_search_scan_limit",
+        "conversation_idle_minutes",
+        "conversation_max_tokens",
         mode="after",
     )
     @classmethod
@@ -133,6 +143,16 @@ class Settings(BaseSettings):
         if v <= 0:
             raise ValueError("Value must be a positive integer")
         return v
+
+    @property
+    def azure_v1_base_url(self) -> str:
+        """Azure OpenAI v1 API base URL.
+
+        The v1 API is served by the stock OpenAI client (not ``AzureOpenAI``):
+        the resource endpoint becomes ``base_url`` with ``/openai/v1`` appended,
+        and no ``api-version`` query parameter is required.
+        """
+        return f"{self.azure_openai_endpoint.rstrip('/')}/openai/v1/"
 
     def get_authorized_users(self) -> set[str]:
         """Parse comma-separated usernames into a normalized set."""

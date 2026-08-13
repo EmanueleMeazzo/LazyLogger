@@ -69,6 +69,11 @@ def _stem(now: datetime) -> str:
     return f"{now.year}{now.month:02d}{now.day:02d}"
 
 
+def local_date_stem(dt: datetime) -> str:
+    """Return ``YYYYMMDD`` for ``dt`` converted to the user's timezone."""
+    return _stem(dt.astimezone(_user_tz()))
+
+
 def today_daily_note_stem() -> str:
     """Return today's daily-note basename ``YYYYMMDD`` (no folders, no extension).
 
